@@ -35,13 +35,25 @@ RAND_SUFFIX="$(python3 -c 'import secrets; print(secrets.token_hex(2))')"
 SESSION_ID="$(date +%Y%m%d-%H%M%S)-pane-${SAFE_MAIN_PANE}-${RAND_SUFFIX}"
 
 CWD="$(pwd)"
-SESSION_ROOT="${CWD}/.plan/sessions/${SESSION_ID}"
+
+# SESSIONS_ROOT selection: spec-anchor users that keep the default layout
+# (anchor.yaml at repo root AND .specanchor/ directory present) get DAR sessions
+# under .specanchor/dual-agent-review/sessions/. Any other case — including
+# spec-anchor users who remapped paths.* away from .specanchor/ — falls back to
+# the legacy .plan/sessions/ root. DAR intentionally does not parse anchor.yaml.
+if [ -f "$CWD/anchor.yaml" ] && [ -d "$CWD/.specanchor" ]; then
+  SESSIONS_ROOT="$CWD/.specanchor/dual-agent-review/sessions"
+else
+  SESSIONS_ROOT="$CWD/.plan/sessions"
+fi
+SESSION_ROOT="$SESSIONS_ROOT/${SESSION_ID}"
 mkdir -p "$SESSION_ROOT"
 
 # Human-readable meta (the old format SKILL.md used to write).
 {
   printf 'SESSION_ID=%s\n'     "$SESSION_ID"
   printf 'SESSION_ROOT=%s\n'   "$SESSION_ROOT"
+  printf 'SESSIONS_ROOT=%s\n'  "$SESSIONS_ROOT"
   printf 'MAIN_PANE=%s\n'      "$HERDR_PANE_ID"
   printf 'MAIN_TERMINAL=%s\n'  "$MAIN_TERMINAL"
   printf 'WORKSPACE_ID=%s\n'   "$WORKSPACE_ID"
@@ -53,6 +65,7 @@ mkdir -p "$SESSION_ROOT"
 {
   printf 'SESSION_ID=%s\n'     "$(shquote "$SESSION_ID")"
   printf 'SESSION_ROOT=%s\n'   "$(shquote "$SESSION_ROOT")"
+  printf 'SESSIONS_ROOT=%s\n'  "$(shquote "$SESSIONS_ROOT")"
   printf 'MAIN_PANE=%s\n'      "$(shquote "$HERDR_PANE_ID")"
   printf 'MAIN_TERMINAL=%s\n'  "$(shquote "$MAIN_TERMINAL")"
   printf 'WORKSPACE_ID=%s\n'   "$(shquote "$WORKSPACE_ID")"
