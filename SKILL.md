@@ -1,6 +1,6 @@
 ---
 name: dual-agent-review
-description: "Use when the user has a non-trivial plan/design/architecture and wants a second-opinion review loop. Claude Code drafts a plan, sends it to a Codex CLI sibling pane (via herdr) for structured critique, then iterates v1 → v2 → vN until both agents converge (no medium+ findings for 2 rounds, or Codex returns approve, or max 5 rounds). All plan versions and findings persist to .plan/ on disk. Requires HERDR_ENV=1, herdr skill installed, and `codex` CLI on PATH."
+description: "Use when the user has a non-trivial plan/design/architecture and wants a second-opinion review loop. Claude Code drafts a plan, sends it to a session-owned Codex CLI sibling pane (via herdr) for structured critique, then iterates v1 → v2 → vN until both agents converge (no medium+ findings for 2 rounds, or Codex returns approve, or max 5 rounds). It records the current Herdr workspace, manages only panes it owns, and closes owned Codex panes by default after review. All plan versions and findings persist under .plan/sessions/<session-id>/ on disk. Requires HERDR_ENV=1, HERDR_PANE_ID, herdr skill installed, and `codex` CLI on PATH."
 ---
 
 # dual-agent-review — Claude × Codex CLI 收敛式方案评审
@@ -10,247 +10,175 @@ description: "Use when the user has a non-trivial plan/design/architecture and w
 用户说"和我讨论方案 / 出设计 / review 一下" + 任务**非平凡**（多步实现、架构决策、重构、API 设计、性能优化方案）。
 **不适合**：trivial bugfix、单文件改 < 50 行、纯样式调整、纯文案。
 
-## 前置条件硬检查（必做，失败立刻停）
+## 脚本目录
 
-按顺序执行，**任何一项失败就报告并停止，不要尝试 workaround**：
+整个流程被抽到 `scripts/` 下。SKILL.md 调用一律走 `"$SKILL_DIR/scripts/xxx.sh"` 形式（**不要** `bash scripts/xxx.sh`——所有 `.sh` 已带 `#!/usr/bin/env bash` shebang + 可执行位）。
+脚本职责见 `README.md` 的 "Skill internals" 段；交互契约的细节看 `pitfalls.md`。
 
-```bash
-[[ "$HERDR_ENV" == "1" ]] || { echo "ABORT: 不在 herdr 内运行，HERDR_ENV != 1"; exit 1; }
-command -v codex >/dev/null || { echo "ABORT: codex CLI 未安装"; exit 1; }
-herdr integration status 2>&1 | grep -q "codex: current" || echo "WARN: codex 集成可能未装/过期，状态检测会退化为屏幕启发式"
-herdr integration status 2>&1 | grep -q "claude: current" || echo "WARN: claude 集成可能未装"
-```
-
-## 工作流总览
-
-```
-[Claude 主面板]                       [Codex 副面板 (新建)]
-     |                                       |
-     | 1. 与用户讨论，写 .plan/v1.md         |
-     |   (含 goals, non-goals, steps,        |
-     |   open-questions)                     |
-     |                                       |
-     | 2. herdr pane split → run "codex" --→ ready
-     |                                       |
-     | 3. send-text: 首轮 review prompt ---→ 读 .plan/v1.md
-     |    (引用 prompts/codex-review-v1.md)  |
-     |                                       | 4. 产出 .plan/v1.findings.yaml
-     | 5. wait agent-status done ←-----------|    (强制结构化)
-     |                                       |
-     | 6. 解析 findings，对每条 disposition  |
-     |    写 .plan/v1.dispositions.yaml      |
-     |                                       |
-     | 7. 根据 disposition 更新 v2.md        |
-     |    (incorporated 项落地，rejected 项  |
-     |     在 v2 的 "rejected-suggestions"   |
-     |     section 记录理由)                 |
-     |                                       |
-     | 8. send-text: 增量 review prompt ----→ 读 .plan/v2.md + v1.dispositions.yaml
-     |    (引用 prompts/codex-review-vn.md)  |
-     |                                       | 9. 产出 .plan/v2.findings.yaml
-     | 10. 检查收敛条件 ←--------------------|
-     |     - approve OR 2 轮无 medium+ → 收敛 → step 12
-     |     - else 回 step 6 (v3, v4, ...)    |
-     |     - rounds >= 5 → 抛分歧给用户裁决  |
-     |                                       |
-     | 12. 收敛后向用户报告:                 |
-     |     - 最终 plan: .plan/vN.md          |
-     |     - 全历史: .plan/*.findings.yaml   |
-     |     - 等待用户 "go" 才执行            |
-```
-
-## 文件结构（每次 review session 自动建在工作目录的 `.plan/`）
-
-```
-.plan/
-├── v1.md                  # Claude 首版方案
-├── v1.findings.yaml       # Codex 首轮 findings
-├── v1.dispositions.yaml   # Claude 对每条 finding 的处置
-├── v2.md                  # 应用 disposition 后的 v2 方案
-├── v2.diff                # v1 → v2 的 unified diff（git diff --no-index）
-├── v2.findings.yaml
-├── v2.dispositions.yaml
-├── ...
-├── final.md               # 收敛后的最终方案（symlink 到 vN.md）
-└── session.log            # 每轮的时间戳 / verdict / 收敛判定记录
-```
-
-`.plan/` 默认 gitignore，留作本地交互记录。
-
-## 详细步骤
-
-### Step 1：写 v1.md
-
-模板：
-
-```markdown
-# Plan v1: <一行标题>
-
-## Context / Goals
-<问题、约束、目标>
-
-## Non-goals
-<明确不做的事>
-
-## Proposed approach
-<具体方案，按步骤>
-
-## Affected files
-<列出会改的文件 / 模块>
-
-## Risks & open questions
-<已知风险、待定问题>
-
-## Verification plan
-<怎么验证方案落地后是对的>
-```
-
-### Step 2：起 Codex 副面板
+## 前置：解析 SKILL_DIR + 全局开关
 
 ```bash
-NEW=$(herdr pane split "$(herdr pane list | python3 -c '
-import sys, json
-panes = json.load(sys.stdin)["result"]["panes"]
-focused = [p for p in panes if p.get("focused")][0]
-print(focused["pane_id"])
-')" --direction right --no-focus | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["pane_id"])')
-
-echo "$NEW" > .plan/.codex-pane-id
-
-herdr pane run "$NEW" "codex"
-# Codex 启动需要时间，等到出现可输入提示
-herdr wait output "$NEW" --match "›" --regex --timeout 30000 || \
-  herdr wait output "$NEW" --match ">" --timeout 30000
+export SKILL_DIR="$(dirname "$(realpath ~/.claude/skills/dual-agent-review/SKILL.md)")"
+set -euo pipefail
 ```
 
-⚠️ Codex CLI 的提示符是 `›`（U+203A），不是 ASCII `>`。两个 wait 串起来做兜底。
+`set -euo pipefail` 必须打开——本 skill 所有 collaborator 脚本都靠 errexit 在第一处失败立刻中断。`check_convergence.py` 是唯一一个用 stdout enum 而非 exit code 表达正常状态的脚本（详见 Step 10），其他脚本一律 exit 0 = 成功 / exit 1 = 失败。
 
-### Step 3：发送首轮 review prompt
-
-读取 `prompts/codex-review-v1.md` 的模板，把 `{{PLAN_PATH}}` 替换为绝对路径：
+## 前置：硬检查
 
 ```bash
-PROMPT=$(cat ~/.claude/skills/dual-agent-review/prompts/codex-review-v1.md | \
-  sed "s|{{PLAN_PATH}}|$(pwd)/.plan/v1.md|g" | \
-  sed "s|{{OUTPUT_PATH}}|$(pwd)/.plan/v1.findings.yaml|g")
-
-herdr pane send-text "$NEW" "$PROMPT"
-herdr pane send-keys "$NEW" Enter
+"$SKILL_DIR/scripts/preflight.sh"
 ```
 
-### Step 4 & 5：等 Codex 完成并读文件
+任何 fail 立刻报告给用户并停止——不要 workaround。
+
+## Step 0：建立 session
 
 ```bash
-herdr wait agent-status "$NEW" --status done --timeout 600000
-
-# Codex 已把 findings 写到文件，不依赖屏幕抓取
-test -f .plan/v1.findings.yaml || { echo "ABORT: Codex 未生成 findings.yaml"; exit 1; }
+SESSION_ROOT="$("$SKILL_DIR/scripts/init_session.sh")"
+set -a; . "$SESSION_ROOT/session.env"; set +a
 ```
 
-**为什么不 pane read 抓输出？** Codex 输出会被 TUI 排版、滚动、wrap 影响，文件落盘是唯一可靠的契约。
+`init_session.sh` 干的事：
+- 算 `SESSION_ID = $(date +%Y%m%d-%H%M%S)-pane-<sanitized-main-pane>-<4位 hex 随机后缀>`（防同秒冲突）；
+- 在 `$(pwd)/.plan/sessions/$SESSION_ID/` 下建 dir；
+- 写 `session.meta`（人读）+ `session.env`（机读，POSIX shell-quoted）；
+- 写 `workspace-panes.before.json`；
+- stdout 只打印**裸 SESSION_ROOT 路径**——调用者用 command sub 拿到。
 
-### Step 6：解析 + disposition
+之后所有文件都写到 `$SESSION_ROOT/` 下。**不要**写到根 `.plan/`，否则并发 session 互相覆盖。
 
-读 `prompts/disposition.md` 模板自己内部走一遍。每条 finding 必须给出：
-
-```yaml
-- finding_id: F-1
-  disposition: incorporated | rejected | deferred
-  reason: <一句话理由，rejected 必填，incorporated 选填>
-  plan_change_summary: <如果 incorporated，简述改了 plan 哪一节>
-```
-
-写到 `.plan/vN.dispositions.yaml`。
-
-### Step 7：写 v(N+1).md + diff
+## Step 0.5：清理本 Claude 遗留的 review pane
 
 ```bash
-cp .plan/v1.md .plan/v2.md
-# 编辑 v2.md，落地 incorporated 项
-# 在 v2.md 末尾追加 "## Rejected suggestions (from review)" 记录 rejected 项 + 理由
-git diff --no-index .plan/v1.md .plan/v2.md > .plan/v2.diff 2>/dev/null || true
+"$SKILL_DIR/scripts/cleanup_stale_panes.sh" "$SESSION_ROOT" "$MAIN_TERMINAL" "$WORKSPACE_ID"
 ```
 
-### Step 8 & 9：增量 review
+只关满足全部条件的 pane：同 main_terminal + 同 workspace + `.codex-pane-id` 与 `.codex-terminal-id` 双 id 匹配 + agent_status ∈ {done, idle}。其他 pane 一概不动。
+
+## Step 1：写 v1.md
+
+写到 `$SESSION_ROOT/v1.md`，模板见 `$SKILL_DIR/prompts/plan-v1-template.md`（七段：Context/Goals、Non-goals、Proposed approach、Affected files、Risks & open questions、Verification plan）。
+
+## Step 2：起 Codex 副面板
 
 ```bash
-PROMPT=$(cat ~/.claude/skills/dual-agent-review/prompts/codex-review-vn.md | \
-  sed "s|{{PLAN_PATH}}|$(pwd)/.plan/v2.md|g" | \
-  sed "s|{{PREV_DISPOSITION}}|$(pwd)/.plan/v1.dispositions.yaml|g" | \
-  sed "s|{{DIFF_PATH}}|$(pwd)/.plan/v2.diff|g" | \
-  sed "s|{{OUTPUT_PATH}}|$(pwd)/.plan/v2.findings.yaml|g")
-
-herdr pane send-text "$NEW" "$PROMPT"
-herdr pane send-keys "$NEW" Enter
-herdr wait agent-status "$NEW" --status done --timeout 600000
+"$SKILL_DIR/scripts/spawn_codex.sh" "$SESSION_ROOT"
+set -a; . "$SESSION_ROOT/session.env"; set +a  # reload to pick up CODEX_PANE / CODEX_TERMINAL
 ```
 
-⚠️ **不要重启 Codex** —— 同一个 Codex session 保留上下文，第二轮的 prompt 是增量描述，token 远少于重发 plan。
+`spawn_codex.sh` 干的事：用 `$MAIN_PANE`（= 当时的 `$HERDR_PANE_ID`，**不是**当前 focused pane）split 一个右侧 pane、设 cwd 为 `$CWD`、rename 为 `codex-review:$SESSION_ID`、`run codex`、`wait output --match "›" --timeout 60000`。Codex 提示符是 `›`（U+203A），不是 ASCII `>`——单一 waiter，不做 ASCII 兜底（旧版的 `>` 兜底会被 shell prompt 误触发）。
 
-### Step 10：收敛判定
+## Step 3：发首轮 review prompt
 
-```python
-# 伪代码 — Claude 自己心算或写 .plan/check_convergence.py
-import yaml
-f = yaml.safe_load(open(f".plan/v{N}.findings.yaml"))
-
-# 条件 A: Codex 明确 approve
-if f["overall_verdict"] == "approve":
-    return "CONVERGED_APPROVE"
-
-# 条件 B: 连续 2 轮无 medium+
-prev_f = yaml.safe_load(open(f".plan/v{N-1}.findings.yaml")) if N > 1 else None
-def no_blocker(findings):
-    return all(x["severity"] not in ("high", "medium") for x in findings.get("findings", []))
-if prev_f and no_blocker(f) and no_blocker(prev_f):
-    return "CONVERGED_NO_BLOCKERS"
-
-# 条件 C: 达到上限
-if N >= 5:
-    return "MAX_ROUNDS_REACHED"  # 抛回用户
-
-return "CONTINUE"
+```bash
+"$SKILL_DIR/scripts/send_review.sh" "$SESSION_ROOT" 1
 ```
 
-### Step 11：达到 5 轮仍未收敛
+内部先 `assert_pane_owned.sh` → 用 `render_template.py prompts/codex-review-v1.md` 渲染（替代 sed，无 shell metachar 问题）→ send-text + send-keys Enter。
+
+## Step 4 & 5：等 Codex 完成 + 校验输出
+
+```bash
+"$SKILL_DIR/scripts/assert_pane_owned.sh" "$SESSION_ROOT"
+CODEX_PANE="$(cat "$SESSION_ROOT/.codex-pane-id")"
+herdr wait agent-status "$CODEX_PANE" --status done --timeout 600000
+
+if ! "$SKILL_DIR/scripts/validate_findings.py" "$SESSION_ROOT/v1.findings.yaml" > /tmp/dar.err.$$; then
+  ERR="$(cat /tmp/dar.err.$$)"; rm -f /tmp/dar.err.$$
+  "$SKILL_DIR/scripts/retry_findings.sh" "$SESSION_ROOT" 1 "$ERR"  # 硬上限 1 次
+fi
+rm -f /tmp/dar.err.$$
+```
+
+`validate_findings.py` 校验 schema（含 `finding_id` 唯一）。retry 失败抛回用户，**不要**再 retry。**为什么不 pane read 抓输出？** Codex 输出会被 TUI 排版、滚动、wrap 影响；文件落盘是唯一可靠的契约。
+
+## Step 6：解析 + disposition
+
+读 `prompts/disposition.md`，对每条 finding 内部走一遍，写到 `$SESSION_ROOT/vN.dispositions.yaml`（schema 见 `prompts/disposition.md`：`plan_version_reviewed` / `total_findings` / `dispositions[]`，每条含 `finding_id` + `disposition: incorporated|rejected|deferred` + rejected 必填 `reason` + incorporated 必填 `plan_change_summary`）。**`deferred` 对 high/medium severity finding 是非法的**——这类 finding 必须 incorporated，或者 rejected 加一个指向外部 tracker（ticket / doc / owner+deadline）的 substantive `reason`。
+
+```bash
+"$SKILL_DIR/scripts/validate_dispositions.py" "$SESSION_ROOT/v${N}.findings.yaml" "$SESSION_ROOT/v${N}.dispositions.yaml"
+```
+
+9 条校验任一失败 exit 1（含前置 `validate_findings.py` 门禁、set 严格相等、incorporated 必须有 plan_change_summary、high/medium 不允许 `deferred` 等）。**Step 6 必须在 Step 7 收敛判定之前完成**——`check_convergence.py` 的 workflow gate 会拒绝在 `v(N).dispositions.yaml` 不存在时给出收敛 verdict（findings 非空时返回 CONTINUE）。
+
+## Step 7：收敛判定
+
+```bash
+case "$("$SKILL_DIR/scripts/check_convergence.py" "$SESSION_ROOT" "$N")" in
+  CONVERGED_APPROVE|CONVERGED_NO_BLOCKERS) goto_step11=1 ;;
+  CONTINUE)                                 goto_step11=0 ;;  # 继续 Step 8 → Step 9 → loop back to Step 4-5 with N+1
+  MAX_ROUNDS_REACHED)                       goto_step10=1 ;;
+  *) echo "ABORT: unexpected convergence verdict"; exit 1 ;;
+esac
+```
+
+收敛规则：A=Codex `overall_verdict=approve` 且无 high/medium finding / B=连续 2 轮无 high|medium finding / C=N≥5。`overall_verdict=block` **永远**算 blocker（无视 severity 分布）。检查器**所有合法状态都 exit 0**（用 stdout enum），不会被 `set -e` 误杀。
+
+## Step 8：写 v(N+1).md + diff + 聚合 rejected/deferred 段（仅在 CONTINUE 时）
+
+```bash
+cp "$SESSION_ROOT/v${N}.md" "$SESSION_ROOT/v$((N+1)).md"
+# 编辑 v(N+1).md：把 incorporated 项落地到具体段落
+"$SKILL_DIR/scripts/append_rejected_section.py" "$SESSION_ROOT" "$SESSION_ROOT/v$((N+1)).md"
+diff -u "$SESSION_ROOT/v${N}.md" "$SESSION_ROOT/v$((N+1)).md" > "$SESSION_ROOT/v$((N+1)).diff" || true
+```
+
+`append_rejected_section.py` 扫 `$SESSION_ROOT/v*.dispositions.yaml` 全集（按 plan 版本排序），rejected 条目按版本分组写进 `## Rejected suggestions (from review)`、deferred 条目按版本分组写进 `## Deferred suggestions (from review)`。两段都用 line-oriented Markdown 扫描定位，跳过 ``` / ~~~ fenced code block 内的同名标题。已存在的段**整段替换**，保证幂等；不存在时 append 到文件末尾。两段都保留 placeholder（"No rejected/deferred suggestions across all review rounds…"），保证 Step 8 输出可被搜索 anchor。
+
+## Step 9：增量 review（loop back 到 Step 4-5，N→N+1）
+
+```bash
+"$SKILL_DIR/scripts/send_review.sh" "$SESSION_ROOT" "$((N+1))"
+"$SKILL_DIR/scripts/assert_pane_owned.sh" "$SESSION_ROOT"
+CODEX_PANE="$(cat "$SESSION_ROOT/.codex-pane-id")"
+herdr wait agent-status "$CODEX_PANE" --status done --timeout 600000
+if ! "$SKILL_DIR/scripts/validate_findings.py" "$SESSION_ROOT/v$((N+1)).findings.yaml" > /tmp/dar.err.$$; then
+  ERR="$(cat /tmp/dar.err.$$)"; rm -f /tmp/dar.err.$$
+  "$SKILL_DIR/scripts/retry_findings.sh" "$SESSION_ROOT" "$((N+1))" "$ERR"
+fi
+rm -f /tmp/dar.err.$$
+# 然后 N=N+1, 回到 Step 6
+```
+
+⚠️ **不要重启 Codex**——同一 Codex session 保留上下文，第二轮 prompt 是增量描述，token 远少于重发 plan。`send_review.sh` 第二轮起会自动用 `prompts/codex-review-vn.md` + `vN-1.dispositions.yaml` + `vN.diff`。
+
+## Step 10：达到 5 轮仍未收敛
 
 **不要继续硬刚**。报告给用户：
 
 ```
 已迭代 5 轮，剩余分歧：
 - F-X (severity: medium): <description> | Claude 立场: rejected because Y
-- F-Y (severity: high):   <description> | Claude 立场: deferred because Z
+- F-Y (severity: high):   <description> | Claude 立场: incorporated/rejected because Z
 
-请仲裁 / 或同意当前 v5.md 作为最终方案。
+请仲裁，或同意当前 v5.md 作为最终方案。
 ```
 
-### Step 12：收敛后
+## Step 11：收敛后
 
 ```bash
-ln -sfn "v${N}.md" .plan/final.md
-echo "[$(date)] CONVERGED at v${N}" >> .plan/session.log
+"$SKILL_DIR/scripts/append_rejected_section.py" "$SESSION_ROOT" "$SESSION_ROOT/v${N}.md"
+ln -sfn "v${N}.md" "$SESSION_ROOT/final.md"
+echo "[$(date)] CONVERGED at v${N}" >> "$SESSION_ROOT/session.log"
+"$SKILL_DIR/scripts/close_codex_pane.sh" "$SESSION_ROOT"
 ```
 
-然后向用户报告，**等用户明确说"执行"再动手**。
-**不要**自动开始 implement。
+`close_codex_pane.sh` 只在 status ∈ {done, idle, unknown} 时关 pane；working/blocked 留着供 inspection。需强关 pass `--force`：`"$SKILL_DIR/scripts/close_codex_pane.sh" "$SESSION_ROOT" --force`（写 `FORCE_CLOSED` 到 session.log）。
 
-## 收敛后 Codex 面板的处理
+`append_rejected_section.py` 在 final.md 之前再跑一次是必要的：CONVERGED_NO_BLOCKERS 路径下，本轮（round N）的 dispositions 在 Step 6 写完，但 Step 8 因为不是 CONTINUE 没执行，v(N).md 仍是 round N-1 Step 8 产物、不含本轮 rejected/deferred 段。脚本 idempotent，CONVERGED_APPROVE 路径（findings: []）只会写空 placeholders，不会破坏什么。
 
-默认**保留**面板（用户可能想追问）。仅在用户说"清理掉"时：
-
-```bash
-herdr pane close "$(cat .plan/.codex-pane-id)"
-rm .plan/.codex-pane-id
-```
+向用户报告：最终 plan = `$SESSION_ROOT/final.md`、全历史 = `$SESSION_ROOT/*.findings.yaml`、等用户明确说 **"go"** 才动手实施。**不要**自动开始 implement。如果 Codex pane 还在（working/blocked），告知用户可手动 `close_codex_pane.sh $SESSION_ROOT --force` 强关；否则下次 session 启动时 Step 0.5 会按 `${DAR_PANE_TTL_SECS:-7200}` 秒 TTL 兜底清掉。
 
 ## 避坑清单
 
-详见 [pitfalls.md](pitfalls.md)。**每次 session 前过一遍**，至少确认前 4 条。
+详见 [pitfalls.md](pitfalls.md)。**每次 session 前过一遍**，至少确认 §必查 全部 OK。
 
 ## 设计原则（不要轻易改）
 
 1. **方案永远在文件，不在消息里飘** — Codex / Claude 都通过路径交换信息，token 省、可审计、可恢复。
-2. **强制 YAML schema** — Codex 不按格式输出就让它重写一次，否则 Claude 解析失败会反复 retry 烧 token。
+2. **强制 YAML schema** — Codex 不按格式输出就让它 retry 一次，否则 Claude 解析失败会反复 retry 烧 token。
 3. **Disposition 必须显式** — 每条 finding 都要 Claude 立场，不能默默忽略。
 4. **硬上限 5 轮** — 两个不同训练的模型对设计永远可能有微小分歧，追求"完全同意"会无限循环。
 5. **不自动执行** — review 完只给报告，等用户 explicit go。
