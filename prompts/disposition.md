@@ -10,11 +10,16 @@ total_findings: 5
 dispositions:
   - finding_id: F-1
     disposition: incorporated | rejected | deferred
-    reason: <1-2 sentences>
-    plan_change_summary: <only when incorporated: which section of next plan version reflects this>
+    reason: <required for rejected>
+    plan_change_summary: <required when incorporated: which section of next plan version reflects this>
   - finding_id: F-2
     ...
 ```
+
+`validate_dispositions.py` enforces:
+- `rejected` requires non-empty `reason`.
+- `incorporated` requires non-empty `plan_change_summary`.
+- `deferred` is **not allowed** for `high` or `medium` severity findings — those must be either `incorporated` or `rejected`. Use `rejected` with a substantive `reason` pointing to where the work is tracked externally (ticket id, doc link, or owner+deadline). Low/nit deferrals stay lightweight.
 
 ## Decision guidelines
 
@@ -24,16 +29,20 @@ dispositions:
 
 **Reject when:**
 - finding is based on a misunderstanding of the plan / context
-- finding is out of scope for the current task (note this — it might become a follow-up task)
+- finding is out of scope for the current task and is being tracked elsewhere (ticket, doc, separate plan)
 - finding contradicts an explicit user constraint
 - suggested_change makes the plan worse
 
 When rejecting, **`reason` must be substantive** — "disagree" is not enough.
 A future Codex round will see this reason; weak reasons invite re-raise.
 
+For a **high or medium** severity finding that is genuinely out of scope but still needs to happen, reject it with a `reason` that points to where the follow-up is tracked (ticket id, doc link, or owner + deadline). That reason becomes the audit record. The validator forbids `deferred` for high/medium because a deferred status has no resolution path — a rejected-with-external-tracker reason does.
+
 **Defer when:**
-- finding is valid but is genuinely a separate, larger piece of work
+- finding is a **low or nit** severity issue that is valid but genuinely separate and small
 - record it as a follow-up TODO in the next plan version's "Risks & open questions" section
+
+`deferred` is the lightweight escape hatch for low/nit-level nice-to-haves. It is **not** valid for high/medium findings — those must be either incorporated now or rejected with an external-tracker pointer.
 
 ## Anti-patterns to avoid
 
