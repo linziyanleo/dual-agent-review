@@ -699,6 +699,153 @@ fi
 pass "fresh mtime + working pane -> no close (TTL not exceeded)"
 
 # ─────────────────────────────────────────────────────────────────────────────
+step "init_session.sh — path selection by repo layout (case A, v3)"
+# Hermetic: build a fake `herdr` on PATH that returns the JSON init_session needs.
+case_a_shim="$WORKDIR/case_a_shim"
+mkdir -p "$case_a_shim"
+cat > "$case_a_shim/herdr" <<'SHIM'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "pane get")  printf '{"result":{"pane":{"terminal_id":"term_a","workspace_id":"ws_a","tab_id":"tab_a"}}}\n' ;;
+  "pane list") printf '[]\n' ;;
+  *) : ;;
+esac
+SHIM
+chmod +x "$case_a_shim/herdr"
+
+# A1: no anchor.yaml -> .plan/sessions fallback (no-spec-anchor case)
+mkdir -p "$WORKDIR/repo-no-anchor"
+SR_A1="$(cd "$WORKDIR/repo-no-anchor" && \
+  HERDR_PANE_ID=p_a PATH="$case_a_shim:$PATH" "$SCRIPT_DIR/init_session.sh")"
+case "$SR_A1" in
+  "$WORKDIR/repo-no-anchor/.plan/sessions/"*) ;;
+  *) die "A1: expected .plan/sessions path under repo-no-anchor, got $SR_A1" ;;
+esac
+grep -q "^SESSIONS_ROOT='$WORKDIR/repo-no-anchor/\.plan/sessions'$" "$SR_A1/session.env" \
+  || die "A1: session.env SESSIONS_ROOT wrong: $(grep SESSIONS_ROOT "$SR_A1/session.env")"
+grep -q "^SESSIONS_ROOT=$WORKDIR/repo-no-anchor/\.plan/sessions$" "$SR_A1/session.meta" \
+  || die "A1: session.meta SESSIONS_ROOT wrong: $(grep SESSIONS_ROOT "$SR_A1/session.meta")"
+pass "A1: no anchor.yaml -> .plan/sessions, session.{env,meta} record SESSIONS_ROOT"
+
+# A2: anchor.yaml + .specanchor/ -> .specanchor/dual-agent-review/sessions (default spec-anchor layout)
+mkdir -p "$WORKDIR/repo-with-anchor/.specanchor"
+: > "$WORKDIR/repo-with-anchor/anchor.yaml"
+SR_A2="$(cd "$WORKDIR/repo-with-anchor" && \
+  HERDR_PANE_ID=p_a PATH="$case_a_shim:$PATH" "$SCRIPT_DIR/init_session.sh")"
+case "$SR_A2" in
+  "$WORKDIR/repo-with-anchor/.specanchor/dual-agent-review/sessions/"*) ;;
+  *) die "A2: expected .specanchor/dual-agent-review/sessions path, got $SR_A2" ;;
+esac
+grep -q "^SESSIONS_ROOT='$WORKDIR/repo-with-anchor/\.specanchor/dual-agent-review/sessions'$" "$SR_A2/session.env" \
+  || die "A2: session.env SESSIONS_ROOT wrong: $(grep SESSIONS_ROOT "$SR_A2/session.env")"
+pass "A2: anchor.yaml + .specanchor/ -> .specanchor/dual-agent-review/sessions"
+
+# A3: anchor.yaml only (no .specanchor/) -> .plan/sessions fallback (custom-layout R5)
+mkdir -p "$WORKDIR/repo-custom-layout"
+: > "$WORKDIR/repo-custom-layout/anchor.yaml"
+SR_A3="$(cd "$WORKDIR/repo-custom-layout" && \
+  HERDR_PANE_ID=p_a PATH="$case_a_shim:$PATH" "$SCRIPT_DIR/init_session.sh")"
+case "$SR_A3" in
+  "$WORKDIR/repo-custom-layout/.plan/sessions/"*) ;;
+  *) die "A3: expected .plan/sessions fallback under repo-custom-layout, got $SR_A3" ;;
+esac
+grep -q "^SESSIONS_ROOT='$WORKDIR/repo-custom-layout/\.plan/sessions'$" "$SR_A3/session.env" \
+  || die "A3: session.env SESSIONS_ROOT wrong: $(grep SESSIONS_ROOT "$SR_A3/session.env")"
+pass "A3: anchor.yaml without .specanchor/ -> .plan/sessions fallback (R5 covered)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+step "cleanup_stale_panes.sh — dual-root scan covers .plan + .specanchor (case B, v3)"
+case_b_repo="$WORKDIR/case_b_repo"
+case_b_cur_root="$case_b_repo/.specanchor/dual-agent-review/sessions"
+case_b_old_root="$case_b_repo/.plan/sessions"
+mkdir -p "$case_b_cur_root/current-id" \
+         "$case_b_cur_root/new-stale-id" \
+         "$case_b_old_root/old-stale-id"
+
+# Current (self) session's session.meta carries CWD so cleanup can derive LEGACY_ROOT.
+cat > "$case_b_cur_root/current-id/session.meta" <<META
+MAIN_TERMINAL=term_main
+WORKSPACE_ID=ws_main
+CWD=$case_b_repo
+META
+
+# Stale session in the new (spec-anchor) root.
+cat > "$case_b_cur_root/new-stale-id/session.meta" <<'META'
+MAIN_TERMINAL=term_main
+WORKSPACE_ID=ws_main
+META
+printf 'new_pane\n'         > "$case_b_cur_root/new-stale-id/.codex-pane-id"
+printf 'shared_terminal\n'  > "$case_b_cur_root/new-stale-id/.codex-terminal-id"
+
+# Stale session in the legacy (.plan) root.
+cat > "$case_b_old_root/old-stale-id/session.meta" <<'META'
+MAIN_TERMINAL=term_main
+WORKSPACE_ID=ws_main
+META
+printf 'old_pane\n'         > "$case_b_old_root/old-stale-id/.codex-pane-id"
+printf 'shared_terminal\n'  > "$case_b_old_root/old-stale-id/.codex-terminal-id"
+
+case_b_shim="$WORKDIR/case_b_shim"
+mkdir -p "$case_b_shim"
+case_b_sentinel="$WORKDIR/case_b_closed.log"
+: > "$case_b_sentinel"
+cat > "$case_b_shim/herdr" <<SHIM
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "pane get")   printf '{"result":{"pane":{"terminal_id":"shared_terminal","agent_status":"done"}}}\n' ;;
+  "pane close") printf '%s\n' "\$3" >> "$case_b_sentinel" ;;
+  *) : ;;
+esac
+SHIM
+chmod +x "$case_b_shim/herdr"
+
+PATH="$case_b_shim:$PATH" \
+  "$SCRIPT_DIR/cleanup_stale_panes.sh" "$case_b_cur_root/current-id" term_main ws_main
+
+grep -qx 'new_pane' "$case_b_sentinel" || die "B: expected new_pane (spec-anchor root) closed; sentinel=$(cat "$case_b_sentinel")"
+grep -qx 'old_pane' "$case_b_sentinel" || die "B: expected old_pane (.plan root) closed; sentinel=$(cat "$case_b_sentinel")"
+pass "B: both .specanchor and .plan stale panes closed (dual-root scan covers migration window)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+step "cleanup_stale_panes.sh — cwd independence + no env dep (case C, v3)"
+# Reuse case_b_repo layout: rebuild stale panes that the previous case consumed.
+mkdir -p "$case_b_cur_root/new-stale-id-2" "$case_b_old_root/old-stale-id-2"
+cat > "$case_b_cur_root/new-stale-id-2/session.meta" <<'META'
+MAIN_TERMINAL=term_main
+WORKSPACE_ID=ws_main
+META
+printf 'new_pane_2\n'        > "$case_b_cur_root/new-stale-id-2/.codex-pane-id"
+printf 'shared_terminal\n'   > "$case_b_cur_root/new-stale-id-2/.codex-terminal-id"
+cat > "$case_b_old_root/old-stale-id-2/session.meta" <<'META'
+MAIN_TERMINAL=term_main
+WORKSPACE_ID=ws_main
+META
+printf 'old_pane_2\n'        > "$case_b_old_root/old-stale-id-2/.codex-pane-id"
+printf 'shared_terminal\n'   > "$case_b_old_root/old-stale-id-2/.codex-terminal-id"
+
+case_c_sentinel="$WORKDIR/case_c_closed.log"
+: > "$case_c_sentinel"
+cat > "$case_b_shim/herdr" <<SHIM
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "pane get")   printf '{"result":{"pane":{"terminal_id":"shared_terminal","agent_status":"done"}}}\n' ;;
+  "pane close") printf '%s\n' "\$3" >> "$case_c_sentinel" ;;
+  *) : ;;
+esac
+SHIM
+
+# Invoke from /tmp (NOT inside the temp repo) with an ABSOLUTE SESSION_ROOT and
+# SESSIONS_ROOT explicitly UNSET. cleanup must still find both stale panes via
+# SESSION_ROOT-derived current root + session.meta-derived legacy root.
+( cd /tmp && unset SESSIONS_ROOT && \
+  PATH="$case_b_shim:$PATH" \
+  "$SCRIPT_DIR/cleanup_stale_panes.sh" "$case_b_cur_root/current-id" term_main ws_main )
+
+grep -qx 'new_pane_2' "$case_c_sentinel" || die "C: expected new_pane_2 closed; sentinel=$(cat "$case_c_sentinel")"
+grep -qx 'old_pane_2' "$case_c_sentinel" || die "C: expected old_pane_2 closed (legacy root from session.meta CWD); sentinel=$(cat "$case_c_sentinel")"
+pass "C: cleanup correct from /tmp with absolute SESSION_ROOT and SESSIONS_ROOT unset"
+
+# ─────────────────────────────────────────────────────────────────────────────
 # init_session.sh requires HERDR_ENV + a live herdr server, so it can't run in
 # this sandbox. Still verify it parses and rejects missing HERDR_PANE_ID.
 step "init_session.sh — refuses without HERDR_PANE_ID"
