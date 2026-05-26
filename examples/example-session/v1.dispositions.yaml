@@ -1,0 +1,17 @@
+plan_version_reviewed: v1
+total_findings: 3
+dispositions:
+  - finding_id: F-1
+    disposition: incorporated
+    plan_change_summary: |
+      v2 "Proposed approach" 第 2 步换成 `golang.org/x/time/rate.Limiter` + `sync.Map` + 30 min TTL sweep goroutine。
+      Risks 段移除 "map 无限增长" 这一条，因为已不复存在。
+  - finding_id: F-2
+    disposition: incorporated
+    plan_change_summary: |
+      v2 "Risks & open questions" 顶端加新段 "Trusted proxy 前置条件"，
+      Affected files 加 `cmd/server/main.go`（调用 `engine.SetTrustedProxies`）。
+  - finding_id: F-3
+    disposition: incorporated
+    plan_change_summary: |
+      v2 "Verification plan" 加 "并发 race test"，列出预期命令 `go test -race ./internal/middleware/...`。

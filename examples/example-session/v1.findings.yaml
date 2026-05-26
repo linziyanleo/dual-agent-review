@@ -1,0 +1,36 @@
+overall_verdict: request_changes
+summary: 方向正确，但有 3 处需要在 v2 里收紧：map 无界增长在生产可能 OOM、IP 取值在公网会被伪造、测试覆盖不到并发条件。
+findings:
+  - finding_id: F-1
+    severity: high
+    category: correctness
+    location: internal/middleware/ratelimit.go (IPRateLimiter map)
+    description: |
+      `map[string]*TokenBucket` 没有任何驱逐策略，公网 IP 空间足以让 map 膨胀到 GB 级别后 OOM。
+      Plan 里说"v2 再加"，但 v1 上线后 1 周就够撞上限。
+    suggested_change: |
+      v1 直接挂一个 LRU 或 TTL（如 30 min 未活跃即淘汰）；
+      或者用 golang.org/x/time/rate.Limiter + 一个 maxSize cap 的 sync.Map + sweep goroutine。
+    rationale: 这是 production-grade rate limit 的基础项，留到 v2 等于在 v1 上线第一周就埋一个 OOM。
+  - finding_id: F-2
+    severity: medium
+    category: security
+    location: internal/middleware/ratelimit.go (IP 取值)
+    description: |
+      `c.ClientIP()` 在 gin 默认配置下会信任 X-Forwarded-For。
+      如果上游 reverse proxy 没强制覆盖该 header，攻击者可以塞任意 IP 绕过 rate limit。
+    suggested_change: |
+      在 Plan 的 "Risks & open questions" 里明确：
+      (a) 假设反代会 strip + reset XFF；
+      (b) 在 main.go 显式 `engine.SetTrustedProxies([...])`，仅信任已知反代。
+      否则 rate limit 形同虚设。
+    rationale: 没这一条 rate limit 在公网无效；属于安全前置条件。
+  - finding_id: F-3
+    severity: low
+    category: testing
+    location: internal/middleware/ratelimit_test.go (Verification plan)
+    description: |
+      Verification plan 只覆盖串行场景。TokenBucket 的 Mutex 错用很难被串行测试发现。
+    suggested_change: |
+      加一个 `go test -race` 跑的 concurrent test：100 个 goroutine 各发 1 次 -> 总 token 消耗严格等于 100。
+    rationale: race detector 是 Go 的 free lunch，rate limit 这种 shared state 一定要跑一次。
