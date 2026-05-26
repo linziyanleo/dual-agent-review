@@ -1,6 +1,6 @@
 ---
 name: dual-agent-review
-description: "Use when the user has a non-trivial plan/design/architecture and wants a second-opinion review loop. Claude Code drafts a plan, sends it to a session-owned Codex CLI sibling pane (via herdr) for structured critique, then iterates v1 → v2 → vN until both agents converge (no medium+ findings for 2 rounds, or Codex returns approve, or max 5 rounds). It records the current Herdr workspace, manages only panes it owns, and closes owned Codex panes by default after review. All plan versions and findings persist under .plan/sessions/<session-id>/ on disk. Requires HERDR_ENV=1, HERDR_PANE_ID, herdr skill installed, and `codex` CLI on PATH."
+description: "Use when the user has a non-trivial plan/design/architecture and wants a second-opinion review loop. Claude Code drafts a plan, sends it to a session-owned Codex CLI sibling pane (via herdr) for structured critique, then iterates v1 → v2 → vN until both agents converge (no medium+ findings for 2 rounds, or Codex returns approve, or max 5 rounds). It records the current Herdr workspace, manages only panes it owns, and closes owned Codex panes by default after review. Plan versions and findings persist under <SESSIONS_ROOT>/<session-id>/, where SESSIONS_ROOT is .specanchor/dual-agent-review/sessions/ in repos that use spec-anchor's default layout (anchor.yaml + .specanchor/ both present), else .plan/sessions/. Requires HERDR_ENV=1, HERDR_PANE_ID, herdr skill installed, and `codex` CLI on PATH."
 ---
 
 # dual-agent-review — Claude × Codex CLI 收敛式方案评审
@@ -41,12 +41,13 @@ set -a; . "$SESSION_ROOT/session.env"; set +a
 
 `init_session.sh` 干的事：
 - 算 `SESSION_ID = $(date +%Y%m%d-%H%M%S)-pane-<sanitized-main-pane>-<4位 hex 随机后缀>`（防同秒冲突）；
-- 在 `$(pwd)/.plan/sessions/$SESSION_ID/` 下建 dir；
-- 写 `session.meta`（人读）+ `session.env`（机读，POSIX shell-quoted）；
+- 选 `SESSIONS_ROOT`：双条件 gate——`$(pwd)/anchor.yaml` 存在 **AND** `$(pwd)/.specanchor/` 目录存在时用 `$(pwd)/.specanchor/dual-agent-review/sessions`；其他全部 fallback 到 `$(pwd)/.plan/sessions`。**不**解析 anchor.yaml 内容；spec-anchor 用户若把 `paths.*` 重映射到非 `.specanchor/` 路径，DAR 自动 fallback——这是设计取舍而非 bug，详见 pitfalls.md；
+- 在 `$SESSIONS_ROOT/$SESSION_ID/` 下建 dir；
+- 写 `session.meta`（人读，含 `SESSIONS_ROOT=` 行）+ `session.env`（机读，POSIX shell-quoted，同样含 `SESSIONS_ROOT=` 行）；
 - 写 `workspace-panes.before.json`；
 - stdout 只打印**裸 SESSION_ROOT 路径**——调用者用 command sub 拿到。
 
-之后所有文件都写到 `$SESSION_ROOT/` 下。**不要**写到根 `.plan/`，否则并发 session 互相覆盖。
+之后所有文件都写到 `$SESSION_ROOT/` 下。**不要**写到根 `.plan/` 或 `.specanchor/`，否则并发 session 互相覆盖。
 
 ## Step 0.5：清理本 Claude 遗留的 review pane
 
@@ -54,7 +55,7 @@ set -a; . "$SESSION_ROOT/session.env"; set +a
 "$SKILL_DIR/scripts/cleanup_stale_panes.sh" "$SESSION_ROOT" "$MAIN_TERMINAL" "$WORKSPACE_ID"
 ```
 
-只关满足全部条件的 pane：同 main_terminal + 同 workspace + `.codex-pane-id` 与 `.codex-terminal-id` 双 id 匹配 + agent_status ∈ {done, idle}。其他 pane 一概不动。
+只关满足全部条件的 pane：同 main_terminal + 同 workspace + `.codex-pane-id` 与 `.codex-terminal-id` 双 id 匹配 + agent_status ∈ {done, idle}。其他 pane 一概不动。working/blocked 由 TTL（`${DAR_PANE_TTL_SECS:-7200}` 秒）兜底强关，reason `AUTO_CLOSED_STALE_TTL`。脚本会同时扫两个 root——当前 `SESSIONS_ROOT`（由 `dirname "$SESSION_ROOT"` 推导）+ 老的 `<own_CWD>/.plan/sessions`（CWD 来自 session.meta 字段）——覆盖从 `.plan/sessions/` 迁到 `.specanchor/dual-agent-review/sessions/` 的窗口。脚本是 arg-based 接口，**不**读 `$(pwd)`、**不**依赖 export 的 SESSIONS_ROOT。
 
 ## Step 1：写 v1.md
 

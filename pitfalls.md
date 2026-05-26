@@ -19,17 +19,19 @@
 - [ ] **不在 `herdr.toml` 里改默认 prefix**，除非确认 prompts 里没硬编码 prefix-触发命令。
 - [ ] **`~/.claude/settings.json` 没禁用 `Stop` / `SubagentStop` hooks**——herdr 的 claude 集成靠这些 hook 上报状态。
 - [ ] **Codex 的 `~/.codex/config.toml` 启用了 hooks 特性**（`herdr integration install codex` 会自动加，但手动改过的话确认）。
+- [ ] **spec-anchor 非默认布局：DAR 走 `.plan/sessions/` fallback** —— DAR 的 `SESSIONS_ROOT` 双条件 gate 只看两个文件系统事实：`anchor.yaml` 存在 **AND** `.specanchor/` 目录存在。如果 spec-anchor 用户把 `anchor.yaml.paths.*` 全部重映射到非 `.specanchor/` 路径（例如 `paths.global_specs: "docs/global/"` 而仓库根没有 `.specanchor/`），DAR 会 fallback 到 `.plan/sessions/`，**不会**自动找到 spec-anchor 实际的 root。这是有意的设计取舍：(a) DAR session 不是 Task Spec，跟 `paths.task_specs` 走是语义错位；(b) 解析 `anchor.yaml` 会把 DAR 耦合到 spec-anchor 内部 YAML schema。**不是 bug**。想 opt in 新布局：手动 `ln -sfn <实际 spec-anchor 根> .specanchor` 即可触发 gate。
+- [ ] **`.specanchor/dual-agent-review/sessions/` 加入 `.gitignore`** —— 同 `.plan/sessions/`，不污染项目 git 历史。DAR 不替用户做决定（你也许想 commit 评审历史给团队看），所以默认不写 `.gitignore`。
 
 ## §运行时（开 loop 前 10 秒）
 
 - [ ] **主面板 pane id 用 `$HERDR_PANE_ID`，并显式 `--cwd "$(pwd)"`** —— Claude 进程的环境变量里 `HERDR_PANE_ID` 就是 Claude 自己所在的 pane id，不随用户 focus 切换而变。曾经踩坑：skill 执行期间用户切到别 space，`pane list` + focused 取到了别 space 的 pane，Codex 副面板被 split 到错的 workspace、错的 cwd。SKILL.md Step 2 已改用 `$HERDR_PANE_ID` + `--cwd`，**不要回退到 focused 探测**。
 - [ ] **用当前主 pane 的 workspace 感知"当前 space"** —— 先 `herdr pane get "$HERDR_PANE_ID"` 拿 `workspace_id`，再 `herdr pane list --workspace "$WORKSPACE_ID"`。不要用全局 `pane list` 推断当前 space。
-- [ ] **每次 review 都用独立 `$SESSION_ROOT`** —— 形如 `.plan/sessions/<session-id>/`。不要在根 `.plan/` 写全局 `.codex-pane-id`，同一仓库里多个 Claude Code session 会互相覆盖。
+- [ ] **每次 review 都用独立 `$SESSION_ROOT`** —— 形如 `<SESSIONS_ROOT>/<session-id>/`，其中 `SESSIONS_ROOT` 是 `.specanchor/dual-agent-review/sessions/` 或 `.plan/sessions/`（见 §配置 的双条件 gate）。不要在根 `.plan/` / 根 `.specanchor/` 写全局 `.codex-pane-id`，同一仓库里多个 Claude Code session 会互相覆盖。
 - [ ] **Codex 副面板身份必须用 pane id + terminal id 双校验** —— split 返回的 pane id 写到 `$SESSION_ROOT/.codex-pane-id`，terminal id 写到 `$SESSION_ROOT/.codex-terminal-id`。每次 send/wait/close 前用 `herdr pane get` 核对 terminal id；不一致就 abort，不要查找任意 codex pane 顶上。
 - [ ] **认清两套 pane id 形态** —— `$HERDR_PANE_ID` 注入的是**短 stable id**（形如 `p_28`），`herdr pane get/list` 返回 `result.pane.pane_id` 是**长 compact id**（形如 `1-2`）。两套都能传给 `pane get/send-text/wait` 这些命令，herdr 内部会解析；但在 sanitize、log、debug 时不要把两种形态当成一致的字符串比较，也不要假设 split 出来的 pane id 与 `$HERDR_PANE_ID` 形态一样。`assert_pane_owned.sh` 比的是 `terminal_id`，不是 pane_id，正是为了对冲这个。
 - [ ] **自动清理只动 owned panes** —— 只能关闭本 skill session 登记过、terminal id 校验通过、且状态为 `done|idle` 的历史 pane。不要按 label、agent name、屏幕内容或 "looks like codex" 扫描关闭。
 - [ ] **Codex 提示符是 `›`（U+203A），不是 ASCII `>`** —— `wait output --match` 注意。SKILL.md 已用兜底两段式 wait。
-- [ ] **`.plan/` 加入仓库 `.gitignore`** —— 不污染项目 git 历史。SKILL.md 假设这点已配置。
+- [ ] **`.plan/` 与 `.specanchor/dual-agent-review/sessions/` 加入仓库 `.gitignore`** —— 不污染项目 git 历史。SKILL.md 假设这点已配置（详见 §配置）。
 - [ ] **每轮开始前 `test -f` 检查上一轮的 findings 文件存在** —— Codex 偶尔会忘写文件直接 done，要早发现早重发。
 - [ ] **`wait agent-status --timeout 600000`（10min）是默认值** —— 超大方案 Codex 读取分析可能更久。卡住先去 `pane read` 看实际进度。
 
@@ -58,5 +60,5 @@
 2. `herdr pane list --workspace "$WORKSPACE_ID"` —— 当前 workspace 下有哪些 pane？
 3. `herdr pane read "$(cat "$SESSION_ROOT/.codex-pane-id")" --source recent --lines 100` —— Codex 实际屏幕状态？读取前先做 terminal id 校验。
 4. `tail -50 ~/.config/herdr/herdr-server.log` —— 看 herdr 服务端日志
-5. `find .plan/sessions -maxdepth 2 -type f | sort` —— 看当前 session 写文件到哪一步
-6. 仍不明确：保留 .plan/，记录 herdr 版本 + codex 版本 + 现象，去 https://github.com/ogulcancelik/herdr/issues 搜
+5. `find .plan/sessions .specanchor/dual-agent-review/sessions -maxdepth 2 -type f 2>/dev/null | sort` —— 看当前 session 写文件到哪一步（覆盖两个可能的 root）
+6. 仍不明确：保留 .plan/ / .specanchor/dual-agent-review/，记录 herdr 版本 + codex 版本 + 现象，去 https://github.com/ogulcancelik/herdr/issues 搜
