@@ -1,202 +1,199 @@
-# DAR × spec-anchor Fusion Design
+# Plan v4: DAR × spec-anchor 薄层串联融合
 
-> dual-agent-review 与 spec-anchor 深度融合：硬依赖 spec-anchor、boot 加载 Spec context、收敛后自动转写 Task Spec + 提炼 Finding、rename `findings` → `review_comments`。
+## Context / Goals
 
-## Decisions (from brainstorm)
+dual-agent-review (DAR) 是 Claude × Codex CLI 收敛式方案评审 skill。当前与 spec-anchor 仅浅层集成（SESSIONS_ROOT 双条件 gate 选 `.specanchor/dual-agent-review/sessions/`）。存在三个核心问题：
 
-| # | Decision | Rationale |
-|---|---|---|
-| D1 | plan = Task Spec 草稿期产物 | DAR 内部保留七段模板做 review，final.md 收敛后通过 specanchor_task 转写为正式 Task Spec。解耦：DAR 管 review 过程，spec-anchor 管 final artifact |
-| D2 | DAR `findings` 改名 `review_comments` + 收敛后选择性提炼为 spec-anchor Finding | 消除同名异义冲突（DAR finding = Codex 对 plan 的批评 vs spec-anchor Finding = hot context fact）；高价值意见回流到 spec-anchor 体系 |
-| D3 | DAR 启动时 boot spec-anchor，让 review 能看 Spec | Codex 对照项目规范评审 plan，不再纸面 review |
-| D4 | 硬依赖 spec-anchor（preflight 拒跑） | 语义纯净、不需维护双分支逻辑、简化 init_session 和 cleanup |
-| D5 | link-not-copy：DAR 文档/模板涉及 spec-anchor 概念一律 link 到源文件 | 避免语义漂移；spec-anchor 更新时 DAR 自动跟上 |
-| D6 | sessions 目录迁入 `.specanchor/tasks/agent_review_<id>/` | 统一到 spec-anchor tasks 目录约定下，前缀 `agent_review_` 视觉区分 review session vs 正式 Task Spec |
-| D7 | Step 11.5/11.6 是 SKILL.md 指令段（Claude 执行），不是 shell script | link-not-copy 的实现层落地：DAR 不 reimplement spec-anchor 协议逻辑，Claude 读源协议直接执行 |
+1. 术语冲突：DAR `findings` 与 spec-anchor `Finding` 同名异义
+2. Review 缺少 Spec context：Codex 只能纸面评审 plan，无法对照项目既有规范
+3. DAR 产物（final.md）不自动流入 spec-anchor 体系（Task Spec / Finding ledger）
 
-## Architecture
+**Goals:**
+- 硬依赖 spec-anchor（preflight 拒跑，删 `.plan/sessions` fallback）
+- DAR 启动时 boot spec-anchor，注入 Spec context 到 Codex review prompt
+- final.md 收敛后自动转写为正式 Task Spec（via specanchor_task 协议）
+- 高价值 review comments 自动提炼为 spec-anchor Findings
+- rename `findings` → `review_comments` 消除同名冲突
+- 所有 DAR 文档涉及 spec-anchor 概念一律 link 到源文件（link-not-copy）
+- sessions 目录迁入 `.specanchor/tasks/agent_review_<id>/`
 
-```
-preflight.sh: + spec-anchor 装+init 三项硬检查、删 .plan/sessions fallback
-       ↓
-Step 0: init_session.sh → $SESSION_ROOT = .specanchor/tasks/agent_review_<session-id>/
-       ↓
-【新】Step 0.4: prereview_boot.sh → specanchor-boot.sh --format=summary → $SESSION_ROOT/spec-context.md
-       ↓
-Step 0.5..11: DAR 现有 9 步不动（rename findings→review_comments）
-       ↓
-【新】Step 11.5: postreview_task (SKILL.md 指令段)
-  Claude 按 specanchor_task 协议读 final.md → 创建 .specanchor/tasks/<module>/YYYY-MM-DD_<slug>.spec.md
-  路径写到 $SESSION_ROOT/.task-spec-path
-       ↓
-【新】Step 11.6: postreview_sediment (SKILL.md 指令段)
-  Claude 筛选 vN.dispositions.yaml 里 type∈{reuse-opportunity,stale-claim,contradiction} + disposition=incorporated
-  按 finding-template.md 创建 .specanchor/findings/F-YYYYMMDD-NNN-<topic>.md
-  source_task = $(cat $SESSION_ROOT/.task-spec-path)
-  清单写到 $SESSION_ROOT/sediment.log
-       ↓
-报告用户: final.md + Task Spec path + sediment.log
-```
+## Non-goals
 
-### Directory layout
-
-```
-.specanchor/tasks/
-  ├── _cross-module/                             ← spec-anchor 正式多模块 Task Spec
-  ├── <module>/                                  ← spec-anchor 正式单模块 Task Spec
-  │   └── 2026-05-26_add-mfa.spec.md
-  ├── agent_review_20260526-103015-pane-X-a4f2/  ← DAR session
-  │   ├── v1.md
-  │   ├── v1.review-comments.yaml
-  │   ├── v1.dispositions.yaml
-  │   ├── v2.md
-  │   ├── v2.review-comments.yaml
-  │   ├── v2.dispositions.yaml
-  │   ├── final.md → v2.md
-  │   ├── spec-context.md
-  │   ├── session.meta / session.env / session.log
-  │   ├── .codex-pane-id / .codex-terminal-id
-  │   ├── .task-spec-path
-  │   ├── sediment.log
-  │   └── workspace-panes.before.json
-  └── agent_review_20260526-141220-pane-Y-b9c3/
-      └── ...
-```
-
-### Key invariants
-
-1. DAR 仍是 plan owner，spec-anchor 不写 session 目录的任何文件
-2. final.md 既是 DAR review 终态，又是 Task Spec 的草稿源——通过 Step 11.5 切割两个角色
-3. spec-context.md 是单向输入（boot → review prompt），review 不写回 spec-anchor
-4. Step 11.5/11.6 失败不阻塞 final.md 报告（soft fail）
-
-## Components
-
-### New scripts (1)
-
-| Script | Purpose | I/O |
-|---|---|---|
-| `scripts/prereview_boot.sh` | 调 specanchor-boot.sh，写 spec-context.md | in: `$SESSION_ROOT`; out: `$SESSION_ROOT/spec-context.md` |
-
-### Renamed scripts + files
-
-| Old | New |
-|---|---|
-| `scripts/validate_findings.py` | `scripts/validate_review_comments.py` |
-| `scripts/retry_findings.sh` | `scripts/retry_review_comments.sh` |
-| `prompts/findings-retry.md` | `prompts/review-comments-retry.md` |
-| session 内 `vN.findings.yaml` | `vN.review-comments.yaml` |
-| codex prompt yaml key `findings:` | `review_comments:` |
-
-### Modified scripts (3)
-
-| Script | Changes |
-|---|---|
-| `scripts/preflight.sh` | 新增 3 项硬检查（spec-anchor SKILL.md 存在 + anchor.yaml + .specanchor/）；`.plan/sessions` 残留 soft warning；总项 6→9 硬检查 + 1 soft warning |
-| `scripts/init_session.sh` | 删 fallback 分支；SESSIONS_ROOT 固定 `$(pwd)/.specanchor/tasks`；session 目录名前缀 `agent_review_` |
-| `scripts/cleanup_stale_panes.sh` | 删双 root 扫描；只扫 `.specanchor/tasks/agent_review_*/` |
-
-### Internal rename across existing scripts
-
-`check_convergence.py`, `validate_dispositions.py`, `append_rejected_section.py`, `send_review.sh`, `render_template.py`, `sanity_tests.sh` 内部所有 `findings` 字面量 → `review_comments`。
-
-### New SKILL.md instruction sections (2)
-
-Step 11.5 和 11.6 是 Claude 指令段，不是 shell script：
-
-- **Step 11.5**: Claude 读 [specanchor_task 协议](~/.claude/skills/spec-anchor/references/commands/task.md)，从 final.md Goals + Affected files 提取 module + slug，创建正式 Task Spec，路径写到 `.task-spec-path`
-- **Step 11.6**: Claude 读所有 `vN.dispositions.yaml`，对每条 `disposition=incorporated` 的 review comment 判断其语义是否属于 spec-anchor Finding type `{reuse-opportunity, stale-claim, contradiction}`（基于 comment 内容推断，非 yaml structured field），符合的按 [finding-template.md](~/.claude/skills/spec-anchor/references/templates/finding-template.md) 创建 `.specanchor/findings/F-*.md`
-
-### Deleted
-
-- `.plan/sessions` fallback 逻辑（init_session / cleanup_stale_panes / preflight 里所有涉及 `.plan/` 的分支）
-- README / pitfalls 中"双条件 gate"和"两个 root 扫描"整段
-
-## Data Flow
-
-```
-启动:
-  preflight.sh ── 9 hard checks (含 spec-anchor 新增 3 项) + 1 soft warning ──→ pass/fail
-  init_session.sh ──→ $SESSION_ROOT = .specanchor/tasks/agent_review_<id>/
-  prereview_boot.sh
-    specanchor-boot.sh --format=summary > $SESSION_ROOT/spec-context.md
-
-Review loop (Step 1-10 unchanged):
-  render_template.py: {{spec_context}} → spec-context.md 内容注入 Codex review prompt 顶部
-  yaml key: review_comments (not findings)
-
-Convergence:
-  Step 11.5 (Claude, mandatory):
-    input: final.md, specanchor_task 协议
-    output: .specanchor/tasks/<module>/YYYY-MM-DD_<slug>.spec.md
-            $SESSION_ROOT/.task-spec-path (路径记录)
-  Step 11.6 (Claude, mandatory):
-    input: all vN.dispositions.yaml, final.md, .task-spec-path, finding-template.md
-    process: Claude 读每条 disposition=incorporated 的 review comment 内容，
-             判断该 comment 是否属于 spec-anchor Finding type
-             {reuse-opportunity, stale-claim, contradiction}。
-             判定依据是 comment 的语义内容，不是 yaml 里的 structured field。
-    output: .specanchor/findings/F-*.md (0..N)
-            $SESSION_ROOT/sediment.log (清单)
-
-Report:
-  - DAR product: $SESSION_ROOT/final.md
-  - spec-anchor product: Task Spec @ $(cat .task-spec-path)
-  - sediment: $SESSION_ROOT/sediment.log
-```
-
-## Error Handling
-
-| Failure point | Strategy | Exit |
-|---|---|---|
-| preflight 新 3 项任一 fail | exit 1 + 修复指引 link to [specanchor_init](~/.claude/skills/spec-anchor/references/commands/init.md) | hard |
-| `prereview_boot.sh` boot 返非 0 | exit 1，不进 Step 0.5 | hard |
-| boot ok 但 spec-context.md 空（无 Global Spec） | warning + 继续；`{{spec_context}}` 渲染为 "(本项目暂无 Spec context)" | soft warn |
-| 检测到 `.plan/sessions/` 残留 | preflight warning，不迁移不阻塞 | soft warn |
-| Step 11.5 Task Spec 转写失败 | 不阻塞 final.md 报告；写 `$SESSION_ROOT/.task-spec-error`；报告提示手动 run specanchor_task | soft fail |
-| Step 11.6 sediment 失败 | 不阻塞；写 `$SESSION_ROOT/.sediment-error`；报告 surface | soft fail |
-
-Core trade-off: review loop (Step 0-11) failure = hard fail; fusion endpoints (boot/task/sediment) failure = soft fail (final.md is the primary DAR deliverable).
-
-## Testing (sanity_tests.sh delta)
-
-从原 45 项变为 ~53 项：
-
-**删除 (~4)**:
-- init_session 双条件 gate 三个旧 case
-- cleanup_stale_panes 双 root case
-
-**新增 (~12)**:
-- preflight 3 fail case (spec-anchor/anchor.yaml/.specanchor 各缺)
-- preflight .plan/sessions 残留 warning case
-- init_session 单一 root + `agent_review_` 前缀验证
-- cleanup_stale_panes 只扫 `agent_review_*`
-- prereview_boot.sh 3 case (boot fail→exit 1; boot ok+空→warning; boot ok+内容→round-trip)
-- render_template.py `{{spec_context}}` 占位符注入 round-trip
-- rename 字面量 grep 验证（所有 .py/.sh 不再含 bare `findings` 字面量，除了指向外部 spec-anchor 的注释/link）
-- finding template 路径存在性检测
-
-**Not covered** (by design): Step 11.5/11.6 由 Claude 执行，sanity 无法 mock；靠 e2e dogfood。
-
-## link-not-copy manifest
-
-| File | Link targets |
-|---|---|
-| `SKILL.md` Step 0 | [spec-anchor tasks 目录约定](~/.claude/skills/spec-anchor/references/commands/task.md) |
-| `SKILL.md` Step 0.4 | [specanchor-boot.sh](~/.claude/skills/spec-anchor/SKILL.md#boot-requirement) |
-| `SKILL.md` Step 11.5 | [specanchor_task 协议](~/.claude/skills/spec-anchor/references/commands/task.md) + [Schema 选择速查](~/.claude/skills/spec-anchor/references/commands/task.md#schema-选择速查) |
-| `SKILL.md` Step 11.6 | [finding-template.md](~/.claude/skills/spec-anchor/references/templates/finding-template.md) + [Findings Ledger §3](~/.claude/skills/spec-anchor/references/concepts/findings-ledger.md) |
-| `README.md` Pane 管理 | [spec-anchor](~/.claude/skills/spec-anchor/SKILL.md) |
-| `README.md` 安装依赖 | [spec-anchor init](~/.claude/skills/spec-anchor/references/commands/init.md) |
-| `pitfalls.md` 硬依赖段 | [specanchor_init](~/.claude/skills/spec-anchor/references/commands/init.md) |
-| `prompts/plan-v1-template.md` 头注 | [Task Spec](~/.claude/skills/spec-anchor/references/commands/task.md) |
-| `prompts/codex-review-v1.md` | `{{spec_context}}` 占位 + review instruction |
-| `prompts/codex-review-vn.md` | 同上 |
-| `prompts/disposition.md` 末尾 | [finding type 规则](~/.claude/skills/spec-anchor/references/concepts/findings-ledger.md) + [spec-anchor Finding](~/.claude/skills/spec-anchor/references/templates/finding-template.md) |
-
-## Scope exclusion
-
-- plan-v1-template.md 模板内容不改（七段结构保留），仅加头注 link
+- 不改 plan-v1-template.md 七段模板内容（只加头注 link）
+- 不把 DAR 注册为 spec-anchor 的 schema integration
 - DAR 独有概念（disposition / convergence / pane lifecycle / session.env format）不向 spec-anchor 靠拢
-- 不新增 Schema integration 到 spec-anchor（DAR 不注册为 spec-anchor 的 schema）
-- 不自动清理 `.plan/sessions` 残留
+- 不自动清理老 `.plan/sessions` 残留（仅 warning）
+- Step 11.5/11.6 不写 shell script（Claude 指令段，link-not-copy 落地）
+- sediment 不提取 `disposition=deferred` 的 review comment
+- 不支持 spec-anchor 非默认 `paths.task_specs` 布局（preflight 显式拒绝）
+
+## Proposed approach
+
+**架构：薄层串联——两端加 wrapper，中间 9 步不动。**
+
+### SKILL.md Bash 前言（新增）
+
+```bash
+export SA_SKILL_DIR="$HOME/.claude/skills/spec-anchor"
+```
+
+`SA_SKILL_DIR` 在 SKILL.md 顶部一次性 export，供 preflight / init_session / prereview_boot 共用。preflight 验证其下的文件存在，init_session 将其持久写入 session.env，prereview_boot 从 session.env 读取。
+
+### 启动期新增
+
+1. `preflight.sh` 新增 5 项硬检查 + 1 soft warning（接收 `$SA_SKILL_DIR` env var）：
+   - `$SA_SKILL_DIR/SKILL.md` 存在
+   - `$SA_SKILL_DIR/scripts/specanchor-boot.sh` 存在（运行时实际调用的入口）
+   - `$(pwd)/anchor.yaml` 存在
+   - `$(pwd)/.specanchor/` 存在
+   - `$(pwd)/anchor.yaml` 中 `paths.task_specs` 为默认值（`.specanchor/tasks` 或 `.specanchor/tasks/`）或缺省——使用 `python3 -c 'import yaml; ...'` 解析；非默认值 exit 1："DAR requires default spec-anchor task layout (.specanchor/tasks/). Non-default paths.task_specs is unsupported."
+   - bonus: 检测到 `.plan/sessions/` 残留 → soft warning
+2. `init_session.sh` 改写：删 fallback 分支；`SESSIONS_ROOT` 固定为 `$(pwd)/.specanchor/tasks`；session 目录名前缀 `agent_review_`；将 `SA_SKILL_DIR` 写入 `session.env`
+3. **新增 `scripts/prereview_boot.sh`**：从 `session.env` source `SA_SKILL_DIR`，调用契约完整形式 `SPECANCHOR_SKILL_DIR="$SA_SKILL_DIR" bash "$SA_SKILL_DIR/scripts/specanchor-boot.sh" --format=summary > "$SESSION_ROOT/spec-context.md"`
+
+### Review 期改动（现有 9 步逻辑不动，只改术语 + 注入 context）
+
+4. `vN.findings.yaml` 全部改名 `vN.review-comments.yaml`
+5. `validate_findings.py` → `validate_review_comments.py`（内部字面量 rename）
+6. `retry_findings.sh` → `retry_review_comments.sh`
+7. `prompts/findings-retry.md` → `prompts/review-comments-retry.md`
+8. `codex-review-v1.md` / `codex-review-vn.md` 模板：
+   - yaml 输出 key `findings:` → `review_comments:`
+   - 新增 `{{SPEC_CONTEXT}}` 占位符，`render_template.py` 通过**文件注入**（非 argv）读取 `spec-context.md` 内容
+   - review instruction 加"对照上方 Spec context 检查 plan 是否符合既定规范"
+9. `check_convergence.py` / `validate_dispositions.py` / `append_rejected_section.py` / `send_review.sh` 内部所有 `findings` 字面量 → `review_comments`
+10. `cleanup_stale_panes.sh`：删双 root 扫描，只扫 `.specanchor/tasks/agent_review_*/`
+
+### Schema 迁移细则（F-4 incorporated）
+
+yaml key 与 field 的精确映射：
+
+| 位置 | 变更前 | 变更后 | 说明 |
+|---|---|---|---|
+| `vN.review-comments.yaml` 顶级 key | `findings:` | `review_comments:` | 文件也改名 |
+| review comment 内部 | `finding_id: F-N` | `finding_id: F-N` | **不改**（ID 是标识符，不是概念名） |
+| `vN.dispositions.yaml` | `total_findings: N` | `total_review_comments: N` | |
+| `vN.dispositions.yaml` 内部 | `finding_id: F-N` | `finding_id: F-N` | **不改**（与 review comment 的 finding_id 对应） |
+| `validate_review_comments.py` 错误信息 | "findings …" | "review_comments …" | |
+| `validate_dispositions.py` 字段查找 | `total_findings` | `total_review_comments` | |
+| `check_convergence.py` 文件名查找 | `v*.findings.yaml` | `v*.review-comments.yaml` | |
+| `append_rejected_section.py` 文件名查找 | `v*.findings.yaml` | `v*.review-comments.yaml` | 用于恢复 rejected/deferred 条目的描述文本 |
+| `append_rejected_section.py` key 读取 | `findings[].description` | `review_comments[].description` | 从 review-comments 恢复描述 |
+
+### render_template.py 文件注入扩展（F-5 incorporated）
+
+新增文件注入语法：send_review.sh 传 `SPEC_CONTEXT_FILE=$SESSION_ROOT/spec-context.md`。render_template.py 检测 `_FILE` 后缀 key → strip 后缀得到占位符名（`SPEC_CONTEXT_FILE` → `{{SPEC_CONTEXT}}`）→ 读取文件内容注入。占位符统一 **大写**。
+
+渲染完成后 render_template.py **断言**输出不含任何未解析的 `{{SPEC_CONTEXT}}` token（exit 1 if found）。
+
+Budget 规则：`spec-context.md` 注入前截断到前 **200 行**（可通过 `DAR_SPEC_CONTEXT_MAX_LINES` env var 覆盖）。超出时在截断处加 `\n... (truncated at $N lines)` 标记。
+
+### 收敛后新增（SKILL.md 指令段，Claude 自动执行）
+
+11. **Step 11.5 — Task Spec 转写**：
+    - Claude 读 `~/.claude/skills/spec-anchor/references/commands/task.md` 协议
+    - 从 final.md Goals + Affected files 提取 module + slug
+    - 创建 `.specanchor/tasks/<module>/YYYY-MM-DD_<slug>.spec.md`
+    - 路径写到 `$SESSION_ROOT/.task-spec-path`
+    - 失败 → 写 `.task-spec-error`，soft fail
+12. **Step 11.6 — sediment 提炼**：
+    - Claude 读所有 `vN.dispositions.yaml`
+    - **主筛选**：`disposition=incorporated` 的 review comment，判断语义是否属于 spec-anchor Finding **完整 type 枚举** `{fact, contradiction, stale-claim, risk, reuse-opportunity, pattern}`
+    - **次筛选**：`disposition=rejected` 的 review comment，其 rejection `reason` 显式陈述了一个 spec-anchor-relevant 的事实（如"该 API 已废弃但超出本 plan 范围"）→ 也提取为 Finding，但 `visibility=hidden`（低成本保留，不打扰用户，未来可参考）
+    - 符合的按 `~/.claude/skills/spec-anchor/references/templates/finding-template.md` 创建 `.specanchor/findings/F-*.md`
+    - `source_task` 字段填 `.task-spec-path` 内容
+    - 清单写 `$SESSION_ROOT/sediment.log`；失败 → 写 `.sediment-error`，soft fail
+    - **不提取** `disposition=deferred` 的 review comment
+
+### 错误处理策略
+
+| 层级 | 策略 |
+|---|---|
+| Review loop (Step 0-11) 失败 | hard fail |
+| Boot 失败 (specanchor-boot 返非 0) | hard fail |
+| Boot ok 但 spec-context.md 空 | soft warn，继续 |
+| Step 11.5/11.6 失败 | soft fail，不阻塞 final.md 报告 |
+
+### link-not-copy 落地
+
+| 文件 | Link targets |
+|---|---|
+| SKILL.md Step 0 | spec-anchor tasks 目录约定 |
+| SKILL.md Step 0.4 | specanchor-boot.sh |
+| SKILL.md Step 11.5 | specanchor_task 协议 + Schema 选择速查 |
+| SKILL.md Step 11.6 | finding-template.md + Findings Ledger §3 |
+| README.md | spec-anchor 安装依赖 + Pane 管理 |
+| pitfalls.md | specanchor_init 修复指引 |
+| prompts/plan-v1-template.md | Task Spec link |
+| prompts/codex-review-v1.md + vn.md | spec_context 注入 |
+| prompts/disposition.md | finding type 规则 + 提炼提示 |
+
+## Affected files
+
+**新增：**
+- `scripts/prereview_boot.sh`
+
+**改名：**
+- `scripts/validate_findings.py` → `scripts/validate_review_comments.py`
+- `scripts/retry_findings.sh` → `scripts/retry_review_comments.sh`
+- `prompts/findings-retry.md` → `prompts/review-comments-retry.md`
+
+**改写（逻辑变更）：**
+- `scripts/preflight.sh`
+- `scripts/init_session.sh`
+- `scripts/cleanup_stale_panes.sh`
+
+**改写（字面量 rename + 模板注入）：**
+- `scripts/check_convergence.py`
+- `scripts/validate_dispositions.py`
+- `scripts/append_rejected_section.py`
+- `scripts/send_review.sh`
+- `scripts/render_template.py`
+- `scripts/sanity_tests.sh`
+- `prompts/codex-review-v1.md`
+- `prompts/codex-review-vn.md`
+- `prompts/disposition.md`
+
+**文档重写（link-not-copy）：**
+- `SKILL.md`
+- `README.md`
+- `pitfalls.md`
+- `prompts/plan-v1-template.md`
+
+**删除：**
+- `.plan/sessions` fallback 逻辑（跨 init_session / cleanup_stale_panes / preflight）
+
+## Risks & open questions
+
+1. **Codex prompt token 膨胀**：~~spec-context.md 大小不可控~~ → 已缓解：render_template.py 文件注入截断到 200 行（可配置 DAR_SPEC_CONTEXT_MAX_LINES）。残余风险：200 行对特大项目可能仍然偏多，但 --format=summary 本身已压缩。
+2. **Step 11.5 module 推断准确性**：final.md 的 Affected files 段未必和 spec-anchor 的 module_path 精确匹配。可能需要 fallback 到 `_cross-module/`。
+3. **Breaking change for existing users**：硬依赖 + rename 是 breaking。需要版本标记 / migration guide。
+4. **sanity_tests 覆盖度**：Step 11.5/11.6 不可 unit test（Claude 指令段）。e2e dogfood 是唯一覆盖路径。如何保证新版本不 regress？
+
+## Verification plan
+
+1. `sanity_tests.sh` 全部 pass（预期 ~55 项），覆盖：
+   - preflight 新增 4 fail case（SKILL.md / boot.sh / anchor.yaml / .specanchor）+ non-default paths.task_specs fail + warning case
+   - init_session 单一 root + `agent_review_` 前缀
+   - cleanup 只扫 `agent_review_*`
+   - prereview_boot 3 case（fail/empty/ok）+ SA_SKILL_DIR invocation contract 验证
+   - render_template {{SPEC_CONTEXT}} **文件注入** round-trip + 截断 at 200 lines + 大文件 500 行测试
+   - rename 字面量 grep 验证
+   - schema migration 验证：validate_review_comments.py + validate_dispositions.py（total_review_comments field）+ check_convergence.py 全部 pass with new field names
+2. e2e dogfood：在一个 spec-anchor 已 init 的项目里跑完整 DAR session，验证：
+   - Codex review prompt 顶部有 Spec context
+   - 收敛后 `.specanchor/tasks/<module>/` 下有正式 Task Spec
+   - `.specanchor/findings/` 下有提炼出的 Finding（如有）
+3. 回归验证：现有 example-session/ 的 v1 / v1.findings / v1.dispositions / v2 / final.md 文件改名后仍能被脚本正确处理
+4. breaking change：确认老项目（无 spec-anchor）跑 DAR 时 preflight 立刻报错且信息清晰
+
+## Rejected suggestions (from review)
+
+### From v1 review
+
+- **F-2** — Task Spec creation is a stated goal, but Step 11.5 failure is classified as soft fail. That means the review can finish and report final.md while no .task-spec-path exists and no formal Task Spec was created, directly violating the goal that final.md automatically flows into spec-anchor.
+  - Reason rejected: User explicitly approved error handling strategy where review-loop failure = hard fail, fusion-endpoint failure = soft fail (confirmed during brainstorm §4). Rationale: final.md is the primary DAR artifact that proves convergence; Task Spec is a downstream derivative. Hard-failing Step 11.5 means a successfully converged review would 'fail' due to module-inference uncertainty, discarding the review value. .task-spec-error + guidance allows manual recovery via specanchor_task. If the user later decides Task Spec is primary, this can be promoted to hard fail in a future iteration.
+
+## Deferred suggestions (from review)
+
+(No deferred suggestions across all review rounds. This section is kept as a contract placeholder so SKILL.md Step 7 always produces a recognisable anchor.)
