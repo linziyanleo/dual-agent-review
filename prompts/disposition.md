@@ -1,12 +1,12 @@
 # Internal template — Claude uses this when processing Codex findings
 
-For each `finding` in `{{FINDINGS_PATH}}`, decide a disposition.
+For each review comment in `{{FINDINGS_PATH}}`, decide a disposition.
 
 ## Output schema (write to {{DISPOSITION_PATH}})
 
 ```yaml
 plan_version_reviewed: v1   # or v2, v3...
-total_findings: 5
+total_review_comments: 5
 dispositions:
   - finding_id: F-1
     disposition: incorporated | rejected | deferred
