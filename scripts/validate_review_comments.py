@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Validate a Codex findings YAML against the dual-agent-review schema.
+"""Validate a Codex review-comments YAML against the dual-agent-review schema.
 
-Usage: validate_findings.py <findings_path>
+Usage: validate_review_comments.py <review_comments_path>
 
 Exit 0 on success (no stdout). Exit 1 with a single human-readable error line on
 stdout — the line is embedded directly into the retry prompt template, so it must
@@ -36,7 +36,7 @@ def fail(msg: str) -> int:
 
 def main() -> int:
     if len(sys.argv) != 2:
-        print("usage: validate_findings.py <findings_path>", file=sys.stderr)
+        print("usage: validate_review_comments.py <path>", file=sys.stderr)
         return 1
     path = Path(sys.argv[1])
     if not path.is_file():
@@ -61,13 +61,13 @@ def main() -> int:
     if not isinstance(doc.get("summary"), str) or not doc["summary"].strip():
         return fail(f"{path}: summary must be a non-empty string")
 
-    findings = doc.get("findings")
+    findings = doc.get("review_comments")
     if not isinstance(findings, list):
-        return fail(f"{path}: findings must be a list (got {type(findings).__name__})")
+        return fail(f"{path}: review_comments must be a list (got {type(findings).__name__})")
 
     seen_ids: dict[str, int] = {}
     for i, f in enumerate(findings):
-        loc = f"findings[{i}]"
+        loc = f"review_comments[{i}]"
         if not isinstance(f, dict):
             return fail(f"{path}: {loc} must be a mapping")
         for k in REQUIRED_FINDING_KEYS:
@@ -82,14 +82,12 @@ def main() -> int:
             return fail(f"{path}: {loc}.category must be one of {sorted(CATEGORIES)}, got {f['category']!r}")
         fid = f["finding_id"]
         if fid in seen_ids:
-            return fail(f"{path}: duplicate finding_id {fid!r} at findings[{i}] and findings[{seen_ids[fid]}]")
+            return fail(f"{path}: duplicate finding_id {fid!r} at review_comments[{i}] and review_comments[{seen_ids[fid]}]")
         seen_ids[fid] = i
 
-    # Prompt mandates `overall_verdict: approve` means `findings: []` — don't
-    # invent nits to fill space. Enforce here so the contract isn't a vibe.
     if verdict == "approve" and findings:
         return fail(
-            f"{path}: overall_verdict='approve' requires findings: [] (per review prompt); got {len(findings)} finding(s): "
+            f"{path}: overall_verdict='approve' requires review_comments: [] (per review prompt); got {len(findings)} review comment(s): "
             f"{[f['finding_id'] for f in findings]}"
         )
 
