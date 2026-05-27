@@ -37,7 +37,7 @@ BLOCKER_SEVERITIES = {"high", "medium"}
 
 def load_findings(path: Path) -> dict:
     if not path.is_file():
-        raise FileNotFoundError(f"findings file not found: {path}")
+        raise FileNotFoundError(f"review-comments file not found: {path}")
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as e:
@@ -50,9 +50,9 @@ def load_findings(path: Path) -> dict:
 def no_blocker(findings_doc: dict) -> bool:
     if findings_doc.get("overall_verdict") == "block":
         return False
-    findings = findings_doc.get("findings", [])
+    findings = findings_doc.get("review_comments", [])
     if not isinstance(findings, list):
-        raise ValueError("findings must be a list")
+        raise ValueError("review_comments must be a list")
     for f in findings:
         if not isinstance(f, dict):
             raise ValueError("each finding must be a mapping")
@@ -77,7 +77,7 @@ def main() -> int:
         return 1
 
     try:
-        current = load_findings(session_root / f"v{n}.findings.yaml")
+        current = load_findings(session_root / f"v{n}.review-comments.yaml")
     except (FileNotFoundError, ValueError) as e:
         print(f"ABORT: {e}", file=sys.stderr)
         return 1
@@ -90,7 +90,7 @@ def main() -> int:
     # Workflow gate: every finding in the current round must have a disposition before
     # the loop can finalize. If findings is non-empty and v(N).dispositions.yaml has not
     # been written yet, return CONTINUE so the caller goes back and records dispositions.
-    current_findings = current.get("findings") or []
+    current_findings = current.get("review_comments") or []
     if current_findings and not (session_root / f"v{n}.dispositions.yaml").is_file():
         print("CONTINUE")
         return 0
@@ -103,7 +103,7 @@ def main() -> int:
     # Condition B (needs round N >= 2): both rounds clean.
     if n >= 2:
         try:
-            prev = load_findings(session_root / f"v{n - 1}.findings.yaml")
+            prev = load_findings(session_root / f"v{n - 1}.review-comments.yaml")
         except (FileNotFoundError, ValueError) as e:
             print(f"ABORT: {e}", file=sys.stderr)
             return 1

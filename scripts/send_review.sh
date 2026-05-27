@@ -26,14 +26,15 @@ case "$ROUND" in ''|*[!0-9]*) fail "round must be a positive integer, got: $ROUN
 
 CODEX_PANE="$(cat "$SESSION_ROOT/.codex-pane-id")"
 PLAN_PATH="$SESSION_ROOT/v${ROUND}.md"
-OUTPUT_PATH="$SESSION_ROOT/v${ROUND}.findings.yaml"
+OUTPUT_PATH="$SESSION_ROOT/v${ROUND}.review-comments.yaml"
 [ -f "$PLAN_PATH" ] || fail "missing plan file: $PLAN_PATH"
 
 if [ "$ROUND" -eq 1 ]; then
   TEMPLATE="$SKILL_DIR/prompts/codex-review-v1.md"
   PROMPT="$("$SCRIPT_DIR/render_template.py" "$TEMPLATE" \
     "PLAN_PATH=$PLAN_PATH" \
-    "OUTPUT_PATH=$OUTPUT_PATH")"
+    "OUTPUT_PATH=$OUTPUT_PATH" \
+    "SPEC_CONTEXT_FILE=$SESSION_ROOT/spec-context.md")"
 else
   TEMPLATE="$SKILL_DIR/prompts/codex-review-vn.md"
   PREV="$((ROUND - 1))"
@@ -45,7 +46,8 @@ else
     "PLAN_PATH=$PLAN_PATH" \
     "PREV_DISPOSITION=$PREV_DISPO" \
     "DIFF_PATH=$DIFF_PATH" \
-    "OUTPUT_PATH=$OUTPUT_PATH")"
+    "OUTPUT_PATH=$OUTPUT_PATH" \
+    "SPEC_CONTEXT_FILE=$SESSION_ROOT/spec-context.md")"
 fi
 
 herdr pane send-text "$CODEX_PANE" "$PROMPT"

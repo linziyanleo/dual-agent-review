@@ -48,7 +48,7 @@ def main() -> int:
     dispositions_path = Path(sys.argv[2])
 
     # Gate (check 0): findings must be schema-valid before we judge dispositions.
-    validator = Path(__file__).with_name("validate_findings.py")
+    validator = Path(__file__).with_name("validate_review_comments.py")
     result = subprocess.run(
         [sys.executable, str(validator), str(findings_path)],
         capture_output=True, text=True,
@@ -96,11 +96,11 @@ def main() -> int:
     if extra:
         return fail(f"{dispositions_path}: disposition references unknown finding_id(s) {sorted(extra)}")
 
-    # Check 6: total_findings.
-    declared_total = dispositions_doc.get("total_findings")
+    # Check 6: total_review_comments.
+    declared_total = dispositions_doc.get("total_review_comments")
     if declared_total != len(dispositions):
         return fail(
-            f"{dispositions_path}: total_findings={declared_total} but actual={len(dispositions)}"
+            f"{dispositions_path}: total_review_comments={declared_total} but actual={len(dispositions)}"
         )
 
     # Check 7: plan_version_reviewed matches file name.

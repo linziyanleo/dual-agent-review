@@ -55,11 +55,11 @@ def collect_groups(dispo_files: list[Path], session_root: Path, kind: str):
             continue
 
         findings_lookup: dict[str, str] = {}
-        fpath = session_root / f"{version}.findings.yaml"
+        fpath = session_root / f"{version}.review-comments.yaml"
         if fpath.is_file():
             try:
                 fdoc = yaml.safe_load(fpath.read_text(encoding="utf-8"))
-                for f in (fdoc.get("findings") if isinstance(fdoc, dict) else []) or []:
+                for f in (fdoc.get("review_comments") if isinstance(fdoc, dict) else []) or []:
                     if isinstance(f, dict) and isinstance(f.get("finding_id"), str):
                         desc = f.get("description")
                         findings_lookup[f["finding_id"]] = desc if isinstance(desc, str) else ""
