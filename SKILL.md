@@ -1,6 +1,6 @@
 ---
 name: dual-agent-review
-description: "Use when the user has a non-trivial plan/design/architecture and wants a second-opinion review loop. Claude Code drafts a plan, sends it to a session-owned Codex CLI sibling pane (via herdr) for structured critique, then iterates v1 → v2 → vN until both agents converge (no medium+ findings for 2 rounds, or Codex returns approve, or max 5 rounds). It records the current Herdr workspace, manages only panes it owns, and closes owned Codex panes by default after review. Plan versions and findings persist under <SESSIONS_ROOT>/<session-id>/, where SESSIONS_ROOT is .specanchor/dual-agent-review/sessions/ in repos that use spec-anchor's default layout (anchor.yaml + .specanchor/ both present), else .plan/sessions/. Requires HERDR_ENV=1, HERDR_PANE_ID, herdr skill installed, and `codex` CLI on PATH."
+description: "Use when the user has a non-trivial plan/design/architecture and wants a second-opinion review loop. Claude Code drafts a plan, sends it to a session-owned Codex CLI sibling pane (via herdr) for structured critique, then iterates v1 → v2 → vN until both agents converge (no medium+ review comments for 2 rounds, or Codex returns approve, or max 5 rounds). Sessions live under .specanchor/tasks/agent_review_<session-id>/. Requires HERDR_ENV=1, HERDR_PANE_ID, herdr skill, codex CLI, and spec-anchor (anchor.yaml + .specanchor/ + default paths.task_specs)."
 ---
 
 # dual-agent-review — Claude × Codex CLI 收敛式方案评审
@@ -15,10 +15,11 @@ description: "Use when the user has a non-trivial plan/design/architecture and w
 整个流程被抽到 `scripts/` 下。SKILL.md 调用一律走 `"$SKILL_DIR/scripts/xxx.sh"` 形式（**不要** `bash scripts/xxx.sh`——所有 `.sh` 已带 `#!/usr/bin/env bash` shebang + 可执行位）。
 脚本职责见 `README.md` 的 "Skill internals" 段；交互契约的细节看 `pitfalls.md`。
 
-## 前置：解析 SKILL_DIR + 全局开关
+## 前置：解析 SKILL_DIR + SA_SKILL_DIR + 全局开关
 
 ```bash
 export SKILL_DIR="$(dirname "$(realpath ~/.claude/skills/dual-agent-review/SKILL.md)")"
+export SA_SKILL_DIR="$HOME/.claude/skills/spec-anchor"
 set -euo pipefail
 ```
 
@@ -40,14 +41,14 @@ set -a; . "$SESSION_ROOT/session.env"; set +a
 ```
 
 `init_session.sh` 干的事：
-- 算 `SESSION_ID = $(date +%Y%m%d-%H%M%S)-pane-<sanitized-main-pane>-<4位 hex 随机后缀>`（防同秒冲突）；
-- 选 `SESSIONS_ROOT`：双条件 gate——`$(pwd)/anchor.yaml` 存在 **AND** `$(pwd)/.specanchor/` 目录存在时用 `$(pwd)/.specanchor/dual-agent-review/sessions`；其他全部 fallback 到 `$(pwd)/.plan/sessions`。**不**解析 anchor.yaml 内容；spec-anchor 用户若把 `paths.*` 重映射到非 `.specanchor/` 路径，DAR 自动 fallback——这是设计取舍而非 bug，详见 pitfalls.md；
+- 算 `SESSION_ID = agent_review_$(date +%Y%m%d-%H%M%S)-pane-<sanitized-main-pane>-<4位 hex 随机后缀>`（防同秒冲突）；
+- `SESSIONS_ROOT` 固定为 `$(pwd)/.specanchor/tasks`（hard spec-anchor dependency）；
 - 在 `$SESSIONS_ROOT/$SESSION_ID/` 下建 dir；
-- 写 `session.meta`（人读，含 `SESSIONS_ROOT=` 行）+ `session.env`（机读，POSIX shell-quoted，同样含 `SESSIONS_ROOT=` 行）；
+- 写 `session.meta`（人读）+ `session.env`（机读，POSIX shell-quoted），含 `SESSIONS_ROOT=` / `SA_SKILL_DIR=` 行；
 - 写 `workspace-panes.before.json`；
 - stdout 只打印**裸 SESSION_ROOT 路径**——调用者用 command sub 拿到。
 
-之后所有文件都写到 `$SESSION_ROOT/` 下。**不要**写到根 `.plan/` 或 `.specanchor/`，否则并发 session 互相覆盖。
+之后所有文件都写到 `$SESSION_ROOT/` 下。**不要**写到根 `.specanchor/` 下的其他位置，否则并发 session 互相覆盖。
 
 ## Step 0.5：清理本 Claude 遗留的 review pane
 
@@ -55,7 +56,15 @@ set -a; . "$SESSION_ROOT/session.env"; set +a
 "$SKILL_DIR/scripts/cleanup_stale_panes.sh" "$SESSION_ROOT" "$MAIN_TERMINAL" "$WORKSPACE_ID"
 ```
 
-只关满足全部条件的 pane：同 main_terminal + 同 workspace + `.codex-pane-id` 与 `.codex-terminal-id` 双 id 匹配 + agent_status ∈ {done, idle}。其他 pane 一概不动。working/blocked 由 TTL（`${DAR_PANE_TTL_SECS:-7200}` 秒）兜底强关，reason `AUTO_CLOSED_STALE_TTL`。脚本会同时扫两个 root——当前 `SESSIONS_ROOT`（由 `dirname "$SESSION_ROOT"` 推导）+ 老的 `<own_CWD>/.plan/sessions`（CWD 来自 session.meta 字段）——覆盖从 `.plan/sessions/` 迁到 `.specanchor/dual-agent-review/sessions/` 的窗口。脚本是 arg-based 接口，**不**读 `$(pwd)`、**不**依赖 export 的 SESSIONS_ROOT。
+只关满足全部条件的 pane：同 main_terminal + 同 workspace + `.codex-pane-id` 与 `.codex-terminal-id` 双 id 匹配 + agent_status ∈ {done, idle}。其他 pane 一概不动。working/blocked 由 TTL（`${DAR_PANE_TTL_SECS:-7200}` 秒）兜底强关，reason `AUTO_CLOSED_STALE_TTL`。扫描范围：`.specanchor/tasks/agent_review_*/`。脚本是 arg-based 接口，**不**读 `$(pwd)`、**不**依赖 export 的 SESSIONS_ROOT。
+
+## Step 0.4：Boot spec-anchor context
+
+```bash
+"$SKILL_DIR/scripts/prereview_boot.sh" "$SESSION_ROOT"
+```
+
+Invokes `specanchor-boot.sh --format=summary`（contract: `$SA_SKILL_DIR/scripts/specanchor-boot.sh`）并写入 `$SESSION_ROOT/spec-context.md`。Boot 失败 → hard fail。输出为空 → soft warn，review 仍继续但 Codex 看不到 Spec Context。
 
 ## Step 1：写 v1.md
 
@@ -85,24 +94,24 @@ set -a; . "$SESSION_ROOT/session.env"; set +a  # reload to pick up CODEX_PANE / 
 CODEX_PANE="$(cat "$SESSION_ROOT/.codex-pane-id")"
 herdr wait agent-status "$CODEX_PANE" --status done --timeout 600000
 
-if ! "$SKILL_DIR/scripts/validate_findings.py" "$SESSION_ROOT/v1.findings.yaml" > /tmp/dar.err.$$; then
+if ! "$SKILL_DIR/scripts/validate_review_comments.py" "$SESSION_ROOT/v1.review-comments.yaml" > /tmp/dar.err.$$; then
   ERR="$(cat /tmp/dar.err.$$)"; rm -f /tmp/dar.err.$$
-  "$SKILL_DIR/scripts/retry_findings.sh" "$SESSION_ROOT" 1 "$ERR"  # 硬上限 1 次
+  "$SKILL_DIR/scripts/retry_review_comments.sh" "$SESSION_ROOT" 1 "$ERR"  # 硬上限 1 次
 fi
 rm -f /tmp/dar.err.$$
 ```
 
-`validate_findings.py` 校验 schema（含 `finding_id` 唯一）。retry 失败抛回用户，**不要**再 retry。**为什么不 pane read 抓输出？** Codex 输出会被 TUI 排版、滚动、wrap 影响；文件落盘是唯一可靠的契约。
+`validate_review_comments.py` 校验 schema（含 `finding_id` 唯一）。retry 失败抛回用户，**不要**再 retry。**为什么不 pane read 抓输出？** Codex 输出会被 TUI 排版、滚动、wrap 影响；文件落盘是唯一可靠的契约。
 
 ## Step 6：解析 + disposition
 
-读 `prompts/disposition.md`，对每条 finding 内部走一遍，写到 `$SESSION_ROOT/vN.dispositions.yaml`（schema 见 `prompts/disposition.md`：`plan_version_reviewed` / `total_findings` / `dispositions[]`，每条含 `finding_id` + `disposition: incorporated|rejected|deferred` + rejected 必填 `reason` + incorporated 必填 `plan_change_summary`）。**`deferred` 对 high/medium severity finding 是非法的**——这类 finding 必须 incorporated，或者 rejected 加一个指向外部 tracker（ticket / doc / owner+deadline）的 substantive `reason`。
+读 `prompts/disposition.md`，对每条 review comment 内部走一遍，写到 `$SESSION_ROOT/vN.dispositions.yaml`（schema 见 `prompts/disposition.md`：`plan_version_reviewed` / `total_review_comments` / `dispositions[]`，每条含 `finding_id` + `disposition: incorporated|rejected|deferred` + rejected 必填 `reason` + incorporated 必填 `plan_change_summary`）。**`deferred` 对 high/medium severity review comment 是非法的**——这类必须 incorporated，或者 rejected 加一个指向外部 tracker（ticket / doc / owner+deadline）的 substantive `reason`。
 
 ```bash
-"$SKILL_DIR/scripts/validate_dispositions.py" "$SESSION_ROOT/v${N}.findings.yaml" "$SESSION_ROOT/v${N}.dispositions.yaml"
+"$SKILL_DIR/scripts/validate_dispositions.py" "$SESSION_ROOT/v${N}.review-comments.yaml" "$SESSION_ROOT/v${N}.dispositions.yaml"
 ```
 
-9 条校验任一失败 exit 1（含前置 `validate_findings.py` 门禁、set 严格相等、incorporated 必须有 plan_change_summary、high/medium 不允许 `deferred` 等）。**Step 6 必须在 Step 7 收敛判定之前完成**——`check_convergence.py` 的 workflow gate 会拒绝在 `v(N).dispositions.yaml` 不存在时给出收敛 verdict（findings 非空时返回 CONTINUE）。
+9 条校验任一失败 exit 1（含前置 `validate_review_comments.py` 门禁、set 严格相等、incorporated 必须有 plan_change_summary、high/medium 不允许 `deferred` 等）。**Step 6 必须在 Step 7 收敛判定之前完成**——`check_convergence.py` 的 workflow gate 会拒绝在 `v(N).dispositions.yaml` 不存在时给出收敛 verdict（review comments 非空时返回 CONTINUE）。
 
 ## Step 7：收敛判定
 
@@ -135,9 +144,9 @@ diff -u "$SESSION_ROOT/v${N}.md" "$SESSION_ROOT/v$((N+1)).md" > "$SESSION_ROOT/v
 "$SKILL_DIR/scripts/assert_pane_owned.sh" "$SESSION_ROOT"
 CODEX_PANE="$(cat "$SESSION_ROOT/.codex-pane-id")"
 herdr wait agent-status "$CODEX_PANE" --status done --timeout 600000
-if ! "$SKILL_DIR/scripts/validate_findings.py" "$SESSION_ROOT/v$((N+1)).findings.yaml" > /tmp/dar.err.$$; then
+if ! "$SKILL_DIR/scripts/validate_review_comments.py" "$SESSION_ROOT/v$((N+1)).review-comments.yaml" > /tmp/dar.err.$$; then
   ERR="$(cat /tmp/dar.err.$$)"; rm -f /tmp/dar.err.$$
-  "$SKILL_DIR/scripts/retry_findings.sh" "$SESSION_ROOT" "$((N+1))" "$ERR"
+  "$SKILL_DIR/scripts/retry_review_comments.sh" "$SESSION_ROOT" "$((N+1))" "$ERR"
 fi
 rm -f /tmp/dar.err.$$
 # 然后 N=N+1, 回到 Step 6
@@ -168,9 +177,25 @@ echo "[$(date)] CONVERGED at v${N}" >> "$SESSION_ROOT/session.log"
 
 `close_codex_pane.sh` 只在 status ∈ {done, idle, unknown} 时关 pane；working/blocked 留着供 inspection。需强关 pass `--force`：`"$SKILL_DIR/scripts/close_codex_pane.sh" "$SESSION_ROOT" --force`（写 `FORCE_CLOSED` 到 session.log）。
 
-`append_rejected_section.py` 在 final.md 之前再跑一次是必要的：CONVERGED_NO_BLOCKERS 路径下，本轮（round N）的 dispositions 在 Step 6 写完，但 Step 8 因为不是 CONTINUE 没执行，v(N).md 仍是 round N-1 Step 8 产物、不含本轮 rejected/deferred 段。脚本 idempotent，CONVERGED_APPROVE 路径（findings: []）只会写空 placeholders，不会破坏什么。
+`append_rejected_section.py` 在 final.md 之前再跑一次是必要的：CONVERGED_NO_BLOCKERS 路径下，本轮（round N）的 dispositions 在 Step 6 写完，但 Step 8 因为不是 CONTINUE 没执行，v(N).md 仍是 round N-1 Step 8 产物、不含本轮 rejected/deferred 段。脚本 idempotent，CONVERGED_APPROVE 路径（review_comments: []）只会写空 placeholders，不会破坏什么。
 
-向用户报告：最终 plan = `$SESSION_ROOT/final.md`、全历史 = `$SESSION_ROOT/*.findings.yaml`、等用户明确说 **"go"** 才动手实施。**不要**自动开始 implement。如果 Codex pane 还在（working/blocked），告知用户可手动 `close_codex_pane.sh $SESSION_ROOT --force` 强关；否则下次 session 启动时 Step 0.5 会按 `${DAR_PANE_TTL_SECS:-7200}` 秒 TTL 兜底清掉。
+## Step 11.5：Task Spec 转写（Claude 自动执行）
+
+读 `$SA_SKILL_DIR/references/commands/task.md` 协议（link-not-copy，不在此 SKILL.md 复述内容）。从 final.md 的 Goals + Affected files 提取 module + slug。创建 `.specanchor/tasks/<module>/YYYY-MM-DD_<slug>.spec.md`。路径写到 `$SESSION_ROOT/.task-spec-path`。失败 → 写 `.task-spec-error`，soft fail（不阻塞 final.md 报告）。
+
+## Step 11.6：sediment 提炼（Claude 自动执行）
+
+读所有 `vN.dispositions.yaml`。按 `$SA_SKILL_DIR/references/templates/finding-template.md`（参见 `$SA_SKILL_DIR/references/concepts/findings-ledger.md` §3）格式创建 Finding：
+
+- **主筛选**：`disposition=incorporated` 的 review comment，判断语义是否属于 `{fact, contradiction, stale-claim, risk, reuse-opportunity, pattern}` 之一
+- **次筛选**：`disposition=rejected` 的 review comment，其 rejection reason 显式陈述了一个 spec-anchor-relevant 事实 → 提取为 Finding，`visibility=hidden`
+- **不提取** `disposition=deferred` 的 review comment
+
+`source_task` 填 `.task-spec-path` 内容。清单写 `$SESSION_ROOT/sediment.log`。失败 → 写 `.sediment-error`，soft fail。
+
+---
+
+向用户报告：最终 plan = `$SESSION_ROOT/final.md`、全历史 = `$SESSION_ROOT/*.review-comments.yaml`、等用户明确说 **"go"** 才动手实施。**不要**自动开始 implement。如果 Codex pane 还在（working/blocked），告知用户可手动 `close_codex_pane.sh $SESSION_ROOT --force` 强关；否则下次 session 启动时 Step 0.5 会按 `${DAR_PANE_TTL_SECS:-7200}` 秒 TTL 兜底清掉。
 
 ## 避坑清单
 

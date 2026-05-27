@@ -1,3 +1,6 @@
+<!-- After convergence this plan becomes a formal Task Spec under .specanchor/tasks/.
+     Format reference: ~/.claude/skills/spec-anchor/references/commands/task.md -->
+
 # Plan v1: <一行标题>
 
 ## Context / Goals
