@@ -56,20 +56,54 @@ fi
 pass "missing template -> non-zero"
 
 # ─────────────────────────────────────────────────────────────────────────────
-step "validate_findings.py — 5 broken fixtures + happy path"
+step "render_template.py — _FILE suffix injection + budget"
+
+# Basic file injection
+INJECT_TPL="$WORKDIR/inject_tpl.txt"
+INJECT_FILE="$WORKDIR/inject_content.txt"
+printf 'Before\n{{SPEC_CONTEXT}}\nAfter\n' > "$INJECT_TPL"
+printf 'ctx line 1\nctx line 2\n' > "$INJECT_FILE"
+OUT="$("$SCRIPT_DIR/render_template.py" "$INJECT_TPL" "SPEC_CONTEXT_FILE=$INJECT_FILE")"
+case "$OUT" in *"ctx line 1"*"ctx line 2"*"After"*) pass "file injection replaces placeholder" ;;
+                                                   *) die "file injection failed: $OUT" ;;
+esac
+
+# Budget truncation at 200 lines
+BIG_FILE="$WORKDIR/big.txt"
+python3 -c 'for i in range(500): print(f"line {i+1}")' > "$BIG_FILE"
+printf '{{SPEC_CONTEXT}}\n' > "$INJECT_TPL"
+OUT="$("$SCRIPT_DIR/render_template.py" "$INJECT_TPL" "SPEC_CONTEXT_FILE=$BIG_FILE")"
+case "$OUT" in *"line 200"*"truncated at 200 lines"*) pass "budget truncation at 200 lines" ;;
+                                                    *) die "budget truncation failed" ;;
+esac
+case "$OUT" in *"line 201"*) die "line 201 should not appear after truncation" ;; esac
+pass "line 201 absent after truncation"
+
+# Missing file -> empty replacement (no error)
+printf '{{SPEC_CONTEXT}}\n' > "$INJECT_TPL"
+OUT="$("$SCRIPT_DIR/render_template.py" "$INJECT_TPL" "SPEC_CONTEXT_FILE=/tmp/nonexistent_dar_file_$$" 2>&1)"
+[ $? -eq 0 ] || die "missing injection file should not error"
+pass "missing injection file -> empty string (no error)"
+
+# Unresolved {{SPEC_CONTEXT}} -> exit 1
+printf '{{SPEC_CONTEXT}}\n' > "$INJECT_TPL"
+"$SCRIPT_DIR/render_template.py" "$INJECT_TPL" 2>/dev/null && die "unresolved SPEC_CONTEXT should fail" || pass "unresolved {{SPEC_CONTEXT}} -> exit 1"
+
+# ─────────────────────────────────────────────────────────────────────────────
+step "validate_review_comments.py — 5 broken fixtures + happy path"
 fixture_dir="$WORKDIR/findings"
 mkdir -p "$fixture_dir"
 
 # (a) empty file
 : > "$fixture_dir/empty.yaml"
-"$SCRIPT_DIR/validate_findings.py" "$fixture_dir/empty.yaml" >/dev/null && die "empty file should fail" || pass "empty file -> fail"
+"$SCRIPT_DIR/validate_review_comments.py" "$fixture_dir/empty.yaml" >/dev/null && die "empty file should fail" || pass "empty file -> fail"
 
 # (b) missing required key (no overall_verdict)
 cat > "$fixture_dir/no_verdict.yaml" <<'YAML'
 summary: x
-findings: []
+review_comments: []
 YAML
-"$SCRIPT_DIR/validate_findings.py" "$fixture_dir/no_verdict.yaml" >/dev/null && die "missing verdict should fail" || pass "missing verdict -> fail"
+"$SCRIPT_DIR/validate_review_comments.py" "$fixture_dir/no_verdict.yaml" >/dev/null && die "missing verdict should fail" || pass "missing verdict -> fail"
 
 # (c) invalid enum
 cat > "$fixture_dir/bad_severity.yaml" <<'YAML'
@@ -84,25 +118,25 @@ findings:
     suggested_change: x
     rationale: x
 YAML
-"$SCRIPT_DIR/validate_findings.py" "$fixture_dir/bad_severity.yaml" >/dev/null && die "bad severity should fail" || pass "invalid enum -> fail"
+"$SCRIPT_DIR/validate_review_comments.py" "$fixture_dir/bad_severity.yaml" >/dev/null && die "bad severity should fail" || pass "invalid enum -> fail"
 
 # (d) findings not a list
 cat > "$fixture_dir/findings_not_list.yaml" <<'YAML'
 overall_verdict: approve
 summary: x
-findings: oops
+review_comments: oops
 YAML
-"$SCRIPT_DIR/validate_findings.py" "$fixture_dir/findings_not_list.yaml" >/dev/null && die "non-list findings should fail" || pass "findings non-list -> fail"
+"$SCRIPT_DIR/validate_review_comments.py" "$fixture_dir/findings_not_list.yaml" >/dev/null && die "non-list review_comments should fail" || pass "review_comments non-list -> fail"
 
 # (e) duplicate finding_id
 cat > "$fixture_dir/dup_id.yaml" <<'YAML'
 overall_verdict: approve
 summary: x
-findings:
+review_comments:
   - {finding_id: F-1, severity: high, category: correctness, location: x, description: x, suggested_change: x, rationale: x}
   - {finding_id: F-1, severity: low,  category: correctness, location: x, description: x, suggested_change: x, rationale: x}
 YAML
-OUT="$("$SCRIPT_DIR/validate_findings.py" "$fixture_dir/dup_id.yaml" 2>&1)" && die "dup id should fail" || true
+OUT="$("$SCRIPT_DIR/validate_review_comments.py" "$fixture_dir/dup_id.yaml" 2>&1)" && die "dup id should fail" || true
 case "$OUT" in *"duplicate finding_id"*"F-1"*) pass "dup finding_id -> fail with descriptive message" ;;
                                           *) die "dup_id error message lacks 'duplicate finding_id F-1': $OUT" ;;
 esac
@@ -111,36 +145,36 @@ esac
 cat > "$fixture_dir/happy.yaml" <<'YAML'
 overall_verdict: request_changes
 summary: a real summary
-findings:
+review_comments:
   - {finding_id: F-1, severity: high, category: security, location: foo:1, description: d, suggested_change: c, rationale: r}
   - {finding_id: F-2, severity: low,  category: testing,  location: foo:2, description: d, suggested_change: c, rationale: r}
 YAML
-"$SCRIPT_DIR/validate_findings.py" "$fixture_dir/happy.yaml" || die "happy path should pass"
+"$SCRIPT_DIR/validate_review_comments.py" "$fixture_dir/happy.yaml" || die "happy path should pass"
 pass "happy path -> 0"
 
 # (f) cross-field: approve + any non-empty findings (high/medium/low/nit) must fail.
-# Per prompts/codex-review-v1.md: approve means findings: [] — don't invent nits to fill space.
+# Per prompts/codex-review-v1.md: approve means review_comments: [] — don't invent nits to fill space.
 cat > "$fixture_dir/approve_with_high.yaml" <<'YAML'
 overall_verdict: approve
 summary: bogus
-findings:
+review_comments:
   - {finding_id: F-1, severity: high, category: correctness, location: x, description: d, suggested_change: c, rationale: r}
 YAML
-OUT="$("$SCRIPT_DIR/validate_findings.py" "$fixture_dir/approve_with_high.yaml" 2>&1)" && die "approve+high should fail" || true
-case "$OUT" in *"requires findings: []"*) pass "approve+high -> fail with 'requires findings: []' message" ;;
-                                        *) die "approve+high message should say 'requires findings: []': $OUT" ;;
+OUT="$("$SCRIPT_DIR/validate_review_comments.py" "$fixture_dir/approve_with_high.yaml" 2>&1)" && die "approve+high should fail" || true
+case "$OUT" in *"requires review_comments: []"*) pass "approve+high -> fail with 'requires review_comments: []' message" ;;
+                                        *) die "approve+high message should say 'requires review_comments: []': $OUT" ;;
 esac
 
 # (g) approve + low-only must also fail (the prompt forbids approve with ANY findings).
 cat > "$fixture_dir/approve_with_low.yaml" <<'YAML'
 overall_verdict: approve
 summary: looks fine but here's a nit
-findings:
+review_comments:
   - {finding_id: F-1, severity: low, category: maintainability, location: x, description: d, suggested_change: c, rationale: r}
 YAML
-OUT="$("$SCRIPT_DIR/validate_findings.py" "$fixture_dir/approve_with_low.yaml" 2>&1)" && die "approve+low should fail" || true
-case "$OUT" in *"requires findings: []"*) pass "approve+low -> fail (no nit smuggling past approve)" ;;
-                                        *) die "approve+low message should say 'requires findings: []': $OUT" ;;
+OUT="$("$SCRIPT_DIR/validate_review_comments.py" "$fixture_dir/approve_with_low.yaml" 2>&1)" && die "approve+low should fail" || true
+case "$OUT" in *"requires review_comments: []"*) pass "approve+low -> fail (no nit smuggling past approve)" ;;
+                                        *) die "approve+low message should say 'requires review_comments: []': $OUT" ;;
 esac
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -154,7 +188,7 @@ HAPPY_FINDINGS="$fixture_dir/happy.yaml"
 # (0) gate: upstream findings invalid (use empty findings file)
 cat > "$dd/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v1
-total_findings: 0
+total_review_comments: 0
 dispositions: []
 YAML
 "$SCRIPT_DIR/validate_dispositions.py" "$fixture_dir/empty.yaml" "$dd/v1.dispositions.yaml" >/dev/null && die "upstream invalid should fail" || pass "upstream findings invalid -> fail"
@@ -162,7 +196,7 @@ YAML
 # (1) missing disposition entry for F-2
 cat > "$dd/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v1
-total_findings: 1
+total_review_comments: 1
 dispositions:
   - {finding_id: F-1, disposition: rejected, reason: nope}
 YAML
@@ -171,7 +205,7 @@ YAML
 # (2) invalid disposition enum
 cat > "$dd/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v1
-total_findings: 2
+total_review_comments: 2
 dispositions:
   - {finding_id: F-1, disposition: ignored, reason: nope}
   - {finding_id: F-2, disposition: rejected, reason: nope}
@@ -181,7 +215,7 @@ YAML
 # (3) rejected without reason
 cat > "$dd/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v1
-total_findings: 2
+total_review_comments: 2
 dispositions:
   - {finding_id: F-1, disposition: rejected, reason: ""}
   - {finding_id: F-2, disposition: rejected, reason: nope}
@@ -191,7 +225,7 @@ YAML
 # (4) extra finding_id in dispositions (set inequality)
 cat > "$dd/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v1
-total_findings: 3
+total_review_comments: 3
 dispositions:
   - {finding_id: F-1, disposition: rejected, reason: nope}
   - {finding_id: F-2, disposition: rejected, reason: nope}
@@ -202,27 +236,27 @@ YAML
 # (5) duplicate finding_id in dispositions
 cat > "$dd/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v1
-total_findings: 2
+total_review_comments: 2
 dispositions:
   - {finding_id: F-1, disposition: rejected, reason: nope}
   - {finding_id: F-1, disposition: rejected, reason: nope}
 YAML
 "$SCRIPT_DIR/validate_dispositions.py" "$HAPPY_FINDINGS" "$dd/v1.dispositions.yaml" >/dev/null && die "dup finding_id should fail" || pass "dup finding_id -> fail"
 
-# (6) total_findings mismatch
+# (6) total_review_comments mismatch
 cat > "$dd/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v1
-total_findings: 99
+total_review_comments: 99
 dispositions:
   - {finding_id: F-1, disposition: rejected, reason: nope}
   - {finding_id: F-2, disposition: rejected, reason: nope}
 YAML
-"$SCRIPT_DIR/validate_dispositions.py" "$HAPPY_FINDINGS" "$dd/v1.dispositions.yaml" >/dev/null && die "total_findings mismatch should fail" || pass "total_findings mismatch -> fail"
+"$SCRIPT_DIR/validate_dispositions.py" "$HAPPY_FINDINGS" "$dd/v1.dispositions.yaml" >/dev/null && die "total_review_comments mismatch should fail" || pass "total_review_comments mismatch -> fail"
 
 # (7) plan_version_reviewed doesn't match filename
 cat > "$dd/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v9
-total_findings: 2
+total_review_comments: 2
 dispositions:
   - {finding_id: F-1, disposition: rejected, reason: nope}
   - {finding_id: F-2, disposition: rejected, reason: nope}
@@ -232,7 +266,7 @@ YAML
 # (8) incorporated without plan_change_summary
 cat > "$dd/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v1
-total_findings: 2
+total_review_comments: 2
 dispositions:
   - {finding_id: F-1, disposition: incorporated}
   - {finding_id: F-2, disposition: rejected, reason: nope}
@@ -242,7 +276,7 @@ YAML
 # happy
 cat > "$dd/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v1
-total_findings: 2
+total_review_comments: 2
 dispositions:
   - {finding_id: F-1, disposition: incorporated, plan_change_summary: did the thing}
   - {finding_id: F-2, disposition: rejected,     reason: not relevant}
@@ -253,7 +287,7 @@ pass "happy dispositions -> 0"
 # (9a) high deferred is rejected outright (even with reason + follow_up).
 cat > "$dd/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v1
-total_findings: 2
+total_review_comments: 2
 dispositions:
   - {finding_id: F-1, disposition: deferred, reason: "needs spec", follow_up: "ticket PROD-42"}
   - {finding_id: F-2, disposition: rejected, reason: nope}
@@ -269,12 +303,12 @@ MED_FINDINGS="$fixture_dir/medium.yaml"
 cat > "$MED_FINDINGS" <<'YAML'
 overall_verdict: request_changes
 summary: x
-findings:
+review_comments:
   - {finding_id: F-1, severity: medium, category: correctness, location: x, description: d, suggested_change: c, rationale: r}
 YAML
 cat > "$dd/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v1
-total_findings: 1
+total_review_comments: 1
 dispositions:
   - {finding_id: F-1, disposition: deferred, reason: "later", follow_up: "ticket FOO-1"}
 YAML
@@ -288,12 +322,12 @@ LOW_FINDINGS="$fixture_dir/low_only.yaml"
 cat > "$LOW_FINDINGS" <<'YAML'
 overall_verdict: request_changes
 summary: x
-findings:
+review_comments:
   - {finding_id: F-1, severity: low, category: maintainability, location: x, description: d, suggested_change: c, rationale: r}
 YAML
 cat > "$dd/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v1
-total_findings: 1
+total_review_comments: 1
 dispositions:
   - {finding_id: F-1, disposition: deferred}
 YAML
@@ -306,20 +340,20 @@ cv="$WORKDIR/conv"
 mkdir -p "$cv"
 
 # CONVERGED_APPROVE on v1.
-cat > "$cv/v1.findings.yaml" <<'YAML'
+cat > "$cv/v1.review-comments.yaml" <<'YAML'
 overall_verdict: approve
 summary: ok
-findings: []
+review_comments: []
 YAML
 OUT="$("$SCRIPT_DIR/check_convergence.py" "$cv" 1)"
 [ "$OUT" = "CONVERGED_APPROVE" ] || die "expected CONVERGED_APPROVE, got $OUT"
 pass "v1 approve -> CONVERGED_APPROVE (exit 0)"
 
 # CONTINUE on v1 with request_changes + medium finding.
-cat > "$cv/v1.findings.yaml" <<'YAML'
+cat > "$cv/v1.review-comments.yaml" <<'YAML'
 overall_verdict: request_changes
 summary: x
-findings:
+review_comments:
   - {finding_id: F-1, severity: medium, category: correctness, location: x, description: d, suggested_change: c, rationale: r}
 YAML
 OUT="$("$SCRIPT_DIR/check_convergence.py" "$cv" 1)"
@@ -327,27 +361,27 @@ OUT="$("$SCRIPT_DIR/check_convergence.py" "$cv" 1)"
 pass "v1 request_changes w/ medium -> CONTINUE (exit 0)"
 
 # CONVERGED_NO_BLOCKERS on v2 when v1 + v2 both have only low/nit (with dispositions written).
-cat > "$cv/v1.findings.yaml" <<'YAML'
+cat > "$cv/v1.review-comments.yaml" <<'YAML'
 overall_verdict: request_changes
 summary: x
-findings:
+review_comments:
   - {finding_id: F-1, severity: low, category: correctness, location: x, description: d, suggested_change: c, rationale: r}
 YAML
-cat > "$cv/v2.findings.yaml" <<'YAML'
+cat > "$cv/v2.review-comments.yaml" <<'YAML'
 overall_verdict: request_changes
 summary: x
-findings:
+review_comments:
   - {finding_id: F-1, severity: nit, category: correctness, location: x, description: d, suggested_change: c, rationale: r}
 YAML
 cat > "$cv/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v1
-total_findings: 1
+total_review_comments: 1
 dispositions:
   - {finding_id: F-1, disposition: deferred}
 YAML
 cat > "$cv/v2.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v2
-total_findings: 1
+total_review_comments: 1
 dispositions:
   - {finding_id: F-1, disposition: deferred}
 YAML
@@ -358,15 +392,15 @@ rm -f "$cv"/v?.dispositions.yaml
 
 # MAX_ROUNDS_REACHED at round 5 with still-pending medium (with dispositions written every round).
 for n in 1 2 3 4 5; do
-  cat > "$cv/v${n}.findings.yaml" <<YAML
+  cat > "$cv/v${n}.review-comments.yaml" <<YAML
 overall_verdict: request_changes
 summary: x
-findings:
+review_comments:
   - {finding_id: F-1, severity: medium, category: correctness, location: x, description: d, suggested_change: c, rationale: r}
 YAML
   cat > "$cv/v${n}.dispositions.yaml" <<YAML
 plan_version_reviewed: v${n}
-total_findings: 1
+total_review_comments: 1
 dispositions:
   - {finding_id: F-1, disposition: rejected, reason: "tracked in external ticket FOO-${n}"}
 YAML
@@ -377,17 +411,17 @@ pass "round 5 unresolved + dispositions written -> MAX_ROUNDS_REACHED (exit 0)"
 rm -f "$cv"/v?.dispositions.yaml
 
 # block verdict with only low/nit findings must still block convergence
-rm -f "$cv/v1.findings.yaml" "$cv/v2.findings.yaml"
-cat > "$cv/v1.findings.yaml" <<'YAML'
+rm -f "$cv/v1.review-comments.yaml" "$cv/v2.review-comments.yaml"
+cat > "$cv/v1.review-comments.yaml" <<'YAML'
 overall_verdict: request_changes
 summary: x
-findings:
+review_comments:
   - {finding_id: F-1, severity: low, category: correctness, location: x, description: d, suggested_change: c, rationale: r}
 YAML
-cat > "$cv/v2.findings.yaml" <<'YAML'
+cat > "$cv/v2.review-comments.yaml" <<'YAML'
 overall_verdict: block
 summary: pipeline broken
-findings:
+review_comments:
   - {finding_id: F-1, severity: low, category: correctness, location: x, description: d, suggested_change: c, rationale: r}
 YAML
 OUT="$("$SCRIPT_DIR/check_convergence.py" "$cv" 2)"
@@ -397,17 +431,17 @@ pass "block verdict + only-low -> CONTINUE (block is always a blocker)"
 # Workflow gate (v3 F-1): findings non-empty but v(N).dispositions.yaml missing
 # must return CONTINUE — the loop cannot finalize without recording dispositions
 # for the current round, even for low-only request_changes.
-rm -f "$cv"/v?.findings.yaml "$cv"/v?.dispositions.yaml
-cat > "$cv/v1.findings.yaml" <<'YAML'
+rm -f "$cv"/v?.review-comments.yaml "$cv"/v?.dispositions.yaml
+cat > "$cv/v1.review-comments.yaml" <<'YAML'
 overall_verdict: request_changes
 summary: x
-findings:
+review_comments:
   - {finding_id: F-1, severity: low, category: style, location: x, description: d, suggested_change: c, rationale: r}
 YAML
-cat > "$cv/v2.findings.yaml" <<'YAML'
+cat > "$cv/v2.review-comments.yaml" <<'YAML'
 overall_verdict: request_changes
 summary: x
-findings:
+review_comments:
   - {finding_id: F-1, severity: low, category: style, location: x, description: d, suggested_change: c, rationale: r}
 YAML
 # v2.dispositions.yaml deliberately absent.
@@ -418,20 +452,20 @@ pass "request_changes + low-only + missing v(N).dispositions -> CONTINUE (workfl
 # Same setup but with v2.dispositions present should now hit rule B (no blockers across v1+v2).
 cat > "$cv/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v1
-total_findings: 1
+total_review_comments: 1
 dispositions:
   - {finding_id: F-1, disposition: deferred}
 YAML
 cat > "$cv/v2.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v2
-total_findings: 1
+total_review_comments: 1
 dispositions:
   - {finding_id: F-1, disposition: deferred}
 YAML
 OUT="$("$SCRIPT_DIR/check_convergence.py" "$cv" 2)"
 [ "$OUT" = "CONVERGED_NO_BLOCKERS" ] || die "expected CONVERGED_NO_BLOCKERS with dispositions written, got $OUT"
 pass "low-only + v(N).dispositions written -> CONVERGED_NO_BLOCKERS (gate releases)"
-rm -f "$cv"/v?.findings.yaml "$cv"/v?.dispositions.yaml
+rm -f "$cv"/v?.review-comments.yaml "$cv"/v?.dispositions.yaml
 
 # ─────────────────────────────────────────────────────────────────────────────
 step "append_rejected_section.py — cross-3-round idempotent"
@@ -439,31 +473,31 @@ ar="$WORKDIR/append"
 mkdir -p "$ar"
 # Build minimal findings + dispositions for v1/v2/v3 with mixed rejected.
 for n in 1 2 3; do
-  cat > "$ar/v${n}.findings.yaml" <<YAML
+  cat > "$ar/v${n}.review-comments.yaml" <<YAML
 overall_verdict: request_changes
 summary: x
-findings:
+review_comments:
   - {finding_id: F-${n}A, severity: medium, category: correctness, location: x, description: "round ${n} A desc", suggested_change: c, rationale: r}
   - {finding_id: F-${n}B, severity: low,    category: scope,       location: x, description: "round ${n} B desc", suggested_change: c, rationale: r}
 YAML
 done
 cat > "$ar/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v1
-total_findings: 2
+total_review_comments: 2
 dispositions:
   - {finding_id: F-1A, disposition: incorporated, plan_change_summary: ok}
   - {finding_id: F-1B, disposition: rejected,     reason: not relevant in v1}
 YAML
 cat > "$ar/v2.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v2
-total_findings: 2
+total_review_comments: 2
 dispositions:
   - {finding_id: F-2A, disposition: rejected, reason: out of scope}
   - {finding_id: F-2B, disposition: deferred}
 YAML
 cat > "$ar/v3.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v3
-total_findings: 2
+total_review_comments: 2
 dispositions:
   - {finding_id: F-3A, disposition: incorporated, plan_change_summary: ok}
   - {finding_id: F-3B, disposition: rejected,     reason: stylistic}
@@ -503,15 +537,15 @@ esac
 # Cross-3-round with a HIGH deferred carrying reason + follow_up — must render both fields.
 arh="$WORKDIR/append_high_defer"
 mkdir -p "$arh"
-cat > "$arh/v1.findings.yaml" <<'YAML'
+cat > "$arh/v1.review-comments.yaml" <<'YAML'
 overall_verdict: request_changes
 summary: x
-findings:
+review_comments:
   - {finding_id: F-1, severity: high, category: correctness, location: x, description: "load-bearing bug", suggested_change: c, rationale: r}
 YAML
 cat > "$arh/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v1
-total_findings: 1
+total_review_comments: 1
 dispositions:
   - {finding_id: F-1, disposition: deferred, reason: "needs DB migration first", follow_up: "ticket OPS-77"}
 YAML
@@ -527,15 +561,15 @@ pass "high-deferred with reason+follow_up renders both fields in deferred sectio
 step "append_rejected_section.py — backtick-wrapped header literal must NOT be eaten (F-5)"
 arb="$WORKDIR/append_backtick_literal"
 mkdir -p "$arb"
-cat > "$arb/v1.findings.yaml" <<'YAML'
+cat > "$arb/v1.review-comments.yaml" <<'YAML'
 overall_verdict: request_changes
 summary: x
-findings:
+review_comments:
   - {finding_id: F-1, severity: low, category: style, location: x, description: "minor", suggested_change: c, rationale: r}
 YAML
 cat > "$arb/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v1
-total_findings: 1
+total_review_comments: 1
 dispositions:
   - {finding_id: F-1, disposition: rejected, reason: stylistic-only}
 YAML
@@ -568,15 +602,15 @@ pass "backtick-wrapped header literal preserved; real section appended at end"
 step "append_rejected_section.py — header inside fenced code block must NOT be eaten (F-3 from v2 review)"
 arf="$WORKDIR/append_fence_literal"
 mkdir -p "$arf"
-cat > "$arf/v1.findings.yaml" <<'YAML'
+cat > "$arf/v1.review-comments.yaml" <<'YAML'
 overall_verdict: request_changes
 summary: x
-findings:
+review_comments:
   - {finding_id: F-1, severity: low, category: style, location: x, description: "minor", suggested_change: c, rationale: r}
 YAML
 cat > "$arf/v1.dispositions.yaml" <<'YAML'
 plan_version_reviewed: v1
-total_findings: 1
+total_review_comments: 1
 dispositions:
   - {finding_id: F-1, disposition: rejected, reason: stylistic-only}
 YAML
@@ -620,23 +654,23 @@ pass "fenced header literal preserved; managed section only matches outside fenc
 
 # ─────────────────────────────────────────────────────────────────────────────
 step "cleanup_stale_panes.sh — TTL force-close path via fake herdr shim"
-cleanup_root="$WORKDIR/cleanup/.plan/sessions"
-mkdir -p "$cleanup_root/current"
-mkdir -p "$cleanup_root/old"
+cleanup_root="$WORKDIR/cleanup/.specanchor/tasks"
+mkdir -p "$cleanup_root/agent_review_current"
+mkdir -p "$cleanup_root/agent_review_old"
 
 # Current session metadata (does nothing; just to satisfy the loop's exclusion).
-cat > "$cleanup_root/current/session.meta" <<'META'
+cat > "$cleanup_root/agent_review_current/session.meta" <<'META'
 MAIN_TERMINAL=term_main
 WORKSPACE_ID=ws_main
 META
 
 # Old session: owned pane with terminal_id matching what fake herdr will return.
-cat > "$cleanup_root/old/session.meta" <<'META'
+cat > "$cleanup_root/agent_review_old/session.meta" <<'META'
 MAIN_TERMINAL=term_main
 WORKSPACE_ID=ws_main
 META
-printf 'old_pane\n'     > "$cleanup_root/old/.codex-pane-id"
-printf 'old_terminal\n' > "$cleanup_root/old/.codex-terminal-id"
+printf 'old_pane\n'     > "$cleanup_root/agent_review_old/.codex-pane-id"
+printf 'old_terminal\n' > "$cleanup_root/agent_review_old/.codex-terminal-id"
 
 # Build a fake `herdr` on PATH. shim writes pane close ids into SENTINEL.
 SHIM_DIR="$WORKDIR/shim"
@@ -660,21 +694,21 @@ SHIM
 chmod +x "$SHIM_DIR/herdr"
 
 # Sub-test 1: mtime > TTL with status=working -> force close, sentinel records call.
-touch -t 202001010000 "$cleanup_root/old"   # very old; well past any TTL
+touch -t 202001010000 "$cleanup_root/agent_review_old"   # very old; well past any TTL
 SHIM_PANE_STATUS=working DAR_PANE_TTL_SECS=7200 PATH="$SHIM_DIR:$PATH" \
-  "$SCRIPT_DIR/cleanup_stale_panes.sh" "$cleanup_root/current" term_main ws_main
+  "$SCRIPT_DIR/cleanup_stale_panes.sh" "$cleanup_root/agent_review_current" term_main ws_main
 grep -qx 'old_pane' "$SENTINEL" || die "expected fake herdr to receive 'pane close old_pane', got: $(cat "$SENTINEL")"
-grep -q 'AUTO_CLOSED_STALE_TTL' "$cleanup_root/old/session.log" || die "TTL close should log AUTO_CLOSED_STALE_TTL"
+grep -q 'AUTO_CLOSED_STALE_TTL' "$cleanup_root/agent_review_old/session.log" || die "TTL close should log AUTO_CLOSED_STALE_TTL"
 pass "TTL expired + working pane -> force-close + sentinel recorded + AUTO_CLOSED_STALE_TTL logged"
 
 # Sub-test 2: mtime fresh (< TTL) with status=working -> must NOT close.
-mkdir -p "$cleanup_root/fresh"
-cat > "$cleanup_root/fresh/session.meta" <<'META'
+mkdir -p "$cleanup_root/agent_review_fresh"
+cat > "$cleanup_root/agent_review_fresh/session.meta" <<'META'
 MAIN_TERMINAL=term_main
 WORKSPACE_ID=ws_main
 META
-printf 'fresh_pane\n'     > "$cleanup_root/fresh/.codex-pane-id"
-printf 'fresh_terminal\n' > "$cleanup_root/fresh/.codex-terminal-id"
+printf 'fresh_pane\n'     > "$cleanup_root/agent_review_fresh/.codex-pane-id"
+printf 'fresh_terminal\n' > "$cleanup_root/agent_review_fresh/.codex-terminal-id"
 
 # rewrite shim to return terminal_id=fresh_terminal so ownership check passes
 cat > "$SHIM_DIR/herdr" <<SHIM
@@ -692,14 +726,14 @@ esac
 SHIM
 : > "$SENTINEL"
 SHIM_PANE_STATUS=working DAR_PANE_TTL_SECS=7200 PATH="$SHIM_DIR:$PATH" \
-  "$SCRIPT_DIR/cleanup_stale_panes.sh" "$cleanup_root/current" term_main ws_main
+  "$SCRIPT_DIR/cleanup_stale_panes.sh" "$cleanup_root/agent_review_current" term_main ws_main
 if grep -qx 'fresh_pane' "$SENTINEL"; then
   die "fresh-mtime working pane must NOT be force-closed; sentinel: $(cat "$SENTINEL")"
 fi
 pass "fresh mtime + working pane -> no close (TTL not exceeded)"
 
 # ─────────────────────────────────────────────────────────────────────────────
-step "init_session.sh — path selection by repo layout (case A, v3)"
+step "init_session.sh — hard .specanchor/tasks path + agent_review_ prefix + SA_SKILL_DIR"
 # Hermetic: build a fake `herdr` on PATH that returns the JSON init_session needs.
 case_a_shim="$WORKDIR/case_a_shim"
 mkdir -p "$case_a_shim"
@@ -713,137 +747,72 @@ esac
 SHIM
 chmod +x "$case_a_shim/herdr"
 
-# A1: no anchor.yaml -> .plan/sessions fallback (no-spec-anchor case)
-mkdir -p "$WORKDIR/repo-no-anchor"
-SR_A1="$(cd "$WORKDIR/repo-no-anchor" && \
-  HERDR_PANE_ID=p_a PATH="$case_a_shim:$PATH" "$SCRIPT_DIR/init_session.sh")"
-case "$SR_A1" in
-  "$WORKDIR/repo-no-anchor/.plan/sessions/"*) ;;
-  *) die "A1: expected .plan/sessions path under repo-no-anchor, got $SR_A1" ;;
+# init_session always writes to .specanchor/tasks/ with agent_review_ prefix
+mkdir -p "$WORKDIR/repo-specanchor/.specanchor"
+SR="$(cd "$WORKDIR/repo-specanchor" && \
+  HERDR_PANE_ID=p_a SA_SKILL_DIR=/tmp/fake-sa PATH="$case_a_shim:$PATH" "$SCRIPT_DIR/init_session.sh")"
+case "$SR" in
+  "$WORKDIR/repo-specanchor/.specanchor/tasks/agent_review_"*) ;;
+  *) die "expected .specanchor/tasks/agent_review_* path, got $SR" ;;
 esac
-grep -q "^SESSIONS_ROOT='$WORKDIR/repo-no-anchor/\.plan/sessions'$" "$SR_A1/session.env" \
-  || die "A1: session.env SESSIONS_ROOT wrong: $(grep SESSIONS_ROOT "$SR_A1/session.env")"
-grep -q "^SESSIONS_ROOT=$WORKDIR/repo-no-anchor/\.plan/sessions$" "$SR_A1/session.meta" \
-  || die "A1: session.meta SESSIONS_ROOT wrong: $(grep SESSIONS_ROOT "$SR_A1/session.meta")"
-pass "A1: no anchor.yaml -> .plan/sessions, session.{env,meta} record SESSIONS_ROOT"
-
-# A2: anchor.yaml + .specanchor/ -> .specanchor/dual-agent-review/sessions (default spec-anchor layout)
-mkdir -p "$WORKDIR/repo-with-anchor/.specanchor"
-: > "$WORKDIR/repo-with-anchor/anchor.yaml"
-SR_A2="$(cd "$WORKDIR/repo-with-anchor" && \
-  HERDR_PANE_ID=p_a PATH="$case_a_shim:$PATH" "$SCRIPT_DIR/init_session.sh")"
-case "$SR_A2" in
-  "$WORKDIR/repo-with-anchor/.specanchor/dual-agent-review/sessions/"*) ;;
-  *) die "A2: expected .specanchor/dual-agent-review/sessions path, got $SR_A2" ;;
-esac
-grep -q "^SESSIONS_ROOT='$WORKDIR/repo-with-anchor/\.specanchor/dual-agent-review/sessions'$" "$SR_A2/session.env" \
-  || die "A2: session.env SESSIONS_ROOT wrong: $(grep SESSIONS_ROOT "$SR_A2/session.env")"
-pass "A2: anchor.yaml + .specanchor/ -> .specanchor/dual-agent-review/sessions"
-
-# A3: anchor.yaml only (no .specanchor/) -> .plan/sessions fallback (custom-layout R5)
-mkdir -p "$WORKDIR/repo-custom-layout"
-: > "$WORKDIR/repo-custom-layout/anchor.yaml"
-SR_A3="$(cd "$WORKDIR/repo-custom-layout" && \
-  HERDR_PANE_ID=p_a PATH="$case_a_shim:$PATH" "$SCRIPT_DIR/init_session.sh")"
-case "$SR_A3" in
-  "$WORKDIR/repo-custom-layout/.plan/sessions/"*) ;;
-  *) die "A3: expected .plan/sessions fallback under repo-custom-layout, got $SR_A3" ;;
-esac
-grep -q "^SESSIONS_ROOT='$WORKDIR/repo-custom-layout/\.plan/sessions'$" "$SR_A3/session.env" \
-  || die "A3: session.env SESSIONS_ROOT wrong: $(grep SESSIONS_ROOT "$SR_A3/session.env")"
-pass "A3: anchor.yaml without .specanchor/ -> .plan/sessions fallback (R5 covered)"
+grep -q "SESSIONS_ROOT=" "$SR/session.env" \
+  || die "session.env missing SESSIONS_ROOT"
+grep -q "SA_SKILL_DIR=" "$SR/session.env" \
+  || die "session.env missing SA_SKILL_DIR"
+grep -q "SA_SKILL_DIR='/tmp/fake-sa'" "$SR/session.env" \
+  || die "session.env SA_SKILL_DIR value wrong: $(grep SA_SKILL_DIR "$SR/session.env")"
+pass "init_session -> .specanchor/tasks/agent_review_* + SA_SKILL_DIR in session.env"
 
 # ─────────────────────────────────────────────────────────────────────────────
-step "cleanup_stale_panes.sh — dual-root scan covers .plan + .specanchor (case B, v3)"
-case_b_repo="$WORKDIR/case_b_repo"
-case_b_cur_root="$case_b_repo/.specanchor/dual-agent-review/sessions"
-case_b_old_root="$case_b_repo/.plan/sessions"
-mkdir -p "$case_b_cur_root/current-id" \
-         "$case_b_cur_root/new-stale-id" \
-         "$case_b_old_root/old-stale-id"
+step "cleanup_stale_panes.sh — agent_review_* filter (only scans matching dirs)"
+case_d_repo="$WORKDIR/case_d_repo"
+case_d_root="$case_d_repo/.specanchor/tasks"
+mkdir -p "$case_d_root/agent_review_current" \
+         "$case_d_root/agent_review_stale" \
+         "$case_d_root/unrelated_task"
 
-# Current (self) session's session.meta carries CWD so cleanup can derive LEGACY_ROOT.
-cat > "$case_b_cur_root/current-id/session.meta" <<META
-MAIN_TERMINAL=term_main
-WORKSPACE_ID=ws_main
-CWD=$case_b_repo
-META
-
-# Stale session in the new (spec-anchor) root.
-cat > "$case_b_cur_root/new-stale-id/session.meta" <<'META'
+cat > "$case_d_root/agent_review_current/session.meta" <<'META'
 MAIN_TERMINAL=term_main
 WORKSPACE_ID=ws_main
 META
-printf 'new_pane\n'         > "$case_b_cur_root/new-stale-id/.codex-pane-id"
-printf 'shared_terminal\n'  > "$case_b_cur_root/new-stale-id/.codex-terminal-id"
 
-# Stale session in the legacy (.plan) root.
-cat > "$case_b_old_root/old-stale-id/session.meta" <<'META'
+cat > "$case_d_root/agent_review_stale/session.meta" <<'META'
 MAIN_TERMINAL=term_main
 WORKSPACE_ID=ws_main
 META
-printf 'old_pane\n'         > "$case_b_old_root/old-stale-id/.codex-pane-id"
-printf 'shared_terminal\n'  > "$case_b_old_root/old-stale-id/.codex-terminal-id"
+printf 'stale_pane\n'       > "$case_d_root/agent_review_stale/.codex-pane-id"
+printf 'stale_terminal\n'   > "$case_d_root/agent_review_stale/.codex-terminal-id"
 
-case_b_shim="$WORKDIR/case_b_shim"
-mkdir -p "$case_b_shim"
-case_b_sentinel="$WORKDIR/case_b_closed.log"
-: > "$case_b_sentinel"
-cat > "$case_b_shim/herdr" <<SHIM
+# Unrelated task dir (non agent_review_ prefix) should NOT be scanned
+cat > "$case_d_root/unrelated_task/session.meta" <<'META'
+MAIN_TERMINAL=term_main
+WORKSPACE_ID=ws_main
+META
+printf 'unrelated_pane\n'     > "$case_d_root/unrelated_task/.codex-pane-id"
+printf 'unrelated_terminal\n' > "$case_d_root/unrelated_task/.codex-terminal-id"
+
+case_d_shim="$WORKDIR/case_d_shim"
+mkdir -p "$case_d_shim"
+case_d_sentinel="$WORKDIR/case_d_closed.log"
+: > "$case_d_sentinel"
+cat > "$case_d_shim/herdr" <<SHIM
 #!/usr/bin/env bash
 case "\$1 \$2" in
-  "pane get")   printf '{"result":{"pane":{"terminal_id":"shared_terminal","agent_status":"done"}}}\n' ;;
-  "pane close") printf '%s\n' "\$3" >> "$case_b_sentinel" ;;
+  "pane get")   printf '{"result":{"pane":{"terminal_id":"stale_terminal","agent_status":"done"}}}\n' ;;
+  "pane close") printf '%s\n' "\$3" >> "$case_d_sentinel" ;;
   *) : ;;
 esac
 SHIM
-chmod +x "$case_b_shim/herdr"
+chmod +x "$case_d_shim/herdr"
 
-PATH="$case_b_shim:$PATH" \
-  "$SCRIPT_DIR/cleanup_stale_panes.sh" "$case_b_cur_root/current-id" term_main ws_main
+PATH="$case_d_shim:$PATH" \
+  "$SCRIPT_DIR/cleanup_stale_panes.sh" "$case_d_root/agent_review_current" term_main ws_main
 
-grep -qx 'new_pane' "$case_b_sentinel" || die "B: expected new_pane (spec-anchor root) closed; sentinel=$(cat "$case_b_sentinel")"
-grep -qx 'old_pane' "$case_b_sentinel" || die "B: expected old_pane (.plan root) closed; sentinel=$(cat "$case_b_sentinel")"
-pass "B: both .specanchor and .plan stale panes closed (dual-root scan covers migration window)"
-
-# ─────────────────────────────────────────────────────────────────────────────
-step "cleanup_stale_panes.sh — cwd independence + no env dep (case C, v3)"
-# Reuse case_b_repo layout: rebuild stale panes that the previous case consumed.
-mkdir -p "$case_b_cur_root/new-stale-id-2" "$case_b_old_root/old-stale-id-2"
-cat > "$case_b_cur_root/new-stale-id-2/session.meta" <<'META'
-MAIN_TERMINAL=term_main
-WORKSPACE_ID=ws_main
-META
-printf 'new_pane_2\n'        > "$case_b_cur_root/new-stale-id-2/.codex-pane-id"
-printf 'shared_terminal\n'   > "$case_b_cur_root/new-stale-id-2/.codex-terminal-id"
-cat > "$case_b_old_root/old-stale-id-2/session.meta" <<'META'
-MAIN_TERMINAL=term_main
-WORKSPACE_ID=ws_main
-META
-printf 'old_pane_2\n'        > "$case_b_old_root/old-stale-id-2/.codex-pane-id"
-printf 'shared_terminal\n'   > "$case_b_old_root/old-stale-id-2/.codex-terminal-id"
-
-case_c_sentinel="$WORKDIR/case_c_closed.log"
-: > "$case_c_sentinel"
-cat > "$case_b_shim/herdr" <<SHIM
-#!/usr/bin/env bash
-case "\$1 \$2" in
-  "pane get")   printf '{"result":{"pane":{"terminal_id":"shared_terminal","agent_status":"done"}}}\n' ;;
-  "pane close") printf '%s\n' "\$3" >> "$case_c_sentinel" ;;
-  *) : ;;
-esac
-SHIM
-
-# Invoke from /tmp (NOT inside the temp repo) with an ABSOLUTE SESSION_ROOT and
-# SESSIONS_ROOT explicitly UNSET. cleanup must still find both stale panes via
-# SESSION_ROOT-derived current root + session.meta-derived legacy root.
-( cd /tmp && unset SESSIONS_ROOT && \
-  PATH="$case_b_shim:$PATH" \
-  "$SCRIPT_DIR/cleanup_stale_panes.sh" "$case_b_cur_root/current-id" term_main ws_main )
-
-grep -qx 'new_pane_2' "$case_c_sentinel" || die "C: expected new_pane_2 closed; sentinel=$(cat "$case_c_sentinel")"
-grep -qx 'old_pane_2' "$case_c_sentinel" || die "C: expected old_pane_2 closed (legacy root from session.meta CWD); sentinel=$(cat "$case_c_sentinel")"
-pass "C: cleanup correct from /tmp with absolute SESSION_ROOT and SESSIONS_ROOT unset"
+grep -qx 'stale_pane' "$case_d_sentinel" || die "D: expected stale_pane closed; sentinel=$(cat "$case_d_sentinel")"
+if grep -qx 'unrelated_pane' "$case_d_sentinel"; then
+  die "D: unrelated_task dir (non agent_review_ prefix) should NOT be scanned"
+fi
+pass "D: only agent_review_* dirs scanned; unrelated dirs ignored"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # init_session.sh requires HERDR_ENV + a live herdr server, so it can't run in
