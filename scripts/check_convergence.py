@@ -13,7 +13,7 @@ Stdout (single line, one of):
   MAX_ROUNDS_REACHED      round >= 5 with no other convergence condition.
   CONTINUE                none of the above; proceed to round N+1.
 
-Workflow gate: if v(N).findings.yaml has any findings AND v(N).dispositions.yaml
+Workflow gate: if v(N).review-comments.yaml has any findings AND v(N).dispositions.yaml
 does not yet exist, return CONTINUE. The convergence verdicts above require an
 explicit disposition for every finding in the current round, so the workflow
 must write v(N).dispositions before this script can finalize.
@@ -84,7 +84,7 @@ def main() -> int:
 
     verdict = current.get("overall_verdict")
     if verdict not in {"approve", "request_changes", "block"}:
-        print(f"ABORT: invalid overall_verdict={verdict!r} in v{n}.findings.yaml", file=sys.stderr)
+        print(f"ABORT: invalid overall_verdict={verdict!r} in v{n}.review-comments.yaml", file=sys.stderr)
         return 1
 
     # Workflow gate: every finding in the current round must have a disposition before

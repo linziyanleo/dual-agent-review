@@ -109,7 +109,7 @@ YAML
 cat > "$fixture_dir/bad_severity.yaml" <<'YAML'
 overall_verdict: approve
 summary: x
-findings:
+review_comments:
   - finding_id: F-1
     severity: catastrophic
     category: correctness

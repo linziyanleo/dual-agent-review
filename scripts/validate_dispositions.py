@@ -6,14 +6,14 @@ Usage: validate_dispositions.py <findings_path> <dispositions_path>
 Exit 0 on success. Exit 1 with the first error on stdout (single line, embeddable).
 
 Checks (executed top to bottom; first failure wins):
-  0. findings file is itself valid per validate_findings.py (gate; rejects dup
+  0. findings file is itself valid per validate_review_comments.py (gate; rejects dup
      finding_id at the producer boundary before anything else runs).
   1. Every finding has a disposition.
   2. disposition is one of incorporated / rejected / deferred.
   3. rejected entries have a non-empty reason.
   4. set(finding_ids in findings) == set(finding_ids in dispositions) (strict).
   5. Dispositions file contains no duplicate finding_id.
-  6. total_findings equals the actual number of disposition entries.
+  6. total_review_comments equals the actual number of disposition entries.
   7. plan_version_reviewed matches the file name (vN.dispositions.yaml -> "vN").
   8. incorporated entries have a non-empty plan_change_summary.
   9. deferred is rejected outright for high/medium severity findings — use
@@ -54,7 +54,7 @@ def main() -> int:
         capture_output=True, text=True,
     )
     if result.returncode != 0:
-        # validate_findings.py prints a single-line error to stdout; surface it verbatim.
+        # validate_review_comments.py prints a single-line error to stdout; surface it verbatim.
         err = (result.stdout or result.stderr).strip()
         return fail(f"{dispositions_path}: upstream findings invalid -> {err}")
 
@@ -70,8 +70,8 @@ def main() -> int:
     if not isinstance(dispositions_doc, dict):
         return fail(f"{dispositions_path}: top-level must be a mapping")
 
-    finding_ids = [f["finding_id"] for f in findings_doc.get("findings", [])]
-    severity_by_id = {f["finding_id"]: f["severity"] for f in findings_doc.get("findings", [])}
+    finding_ids = [f["finding_id"] for f in findings_doc.get("review_comments", [])]
+    severity_by_id = {f["finding_id"]: f["severity"] for f in findings_doc.get("review_comments", [])}
     dispositions = dispositions_doc.get("dispositions")
     if not isinstance(dispositions, list):
         return fail(f"{dispositions_path}: dispositions must be a list")
