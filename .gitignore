@@ -1,3 +1,4 @@
 .DS_Store
 .plan/
 *.log
+.specanchor/tasks/agent_review_*
