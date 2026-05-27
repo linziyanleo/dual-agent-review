@@ -79,11 +79,9 @@ esac
 case "$OUT" in *"line 201"*) die "line 201 should not appear after truncation" ;; esac
 pass "line 201 absent after truncation"
 
-# Missing file -> empty replacement (no error)
+# Missing file -> hard fail (exit 1)
 printf '{{SPEC_CONTEXT}}\n' > "$INJECT_TPL"
-OUT="$("$SCRIPT_DIR/render_template.py" "$INJECT_TPL" "SPEC_CONTEXT_FILE=/tmp/nonexistent_dar_file_$$" 2>&1)"
-[ $? -eq 0 ] || die "missing injection file should not error"
-pass "missing injection file -> empty string (no error)"
+"$SCRIPT_DIR/render_template.py" "$INJECT_TPL" "SPEC_CONTEXT_FILE=/tmp/nonexistent_dar_file_$$" 2>/dev/null && die "missing injection file should fail" || pass "missing _FILE target -> exit 1"
 
 # Unresolved {{SPEC_CONTEXT}} -> exit 1
 printf '{{SPEC_CONTEXT}}\n' > "$INJECT_TPL"

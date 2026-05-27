@@ -3,8 +3,8 @@
 # Sources SA_SKILL_DIR from session.env, invokes specanchor-boot.sh --format=summary.
 #
 # Usage: prereview_boot.sh <session_root>
-# Exit 0 on success (even if spec-context.md is empty — soft warn).
-# Exit 1 if boot script itself fails (hard fail).
+# Exit 0 on success (non-empty spec-context.md).
+# Exit 1 if boot script fails OR produces empty output.
 set -euo pipefail
 
 fail() { printf 'ABORT: %s\n' "$*" >&2; exit 1; }
@@ -28,7 +28,7 @@ SPEC_CONTEXT="$SESSION_ROOT/spec-context.md"
 SPECANCHOR_SKILL_DIR="$SA_SKILL_DIR" bash "$BOOT_SCRIPT" --format=summary > "$SPEC_CONTEXT"
 
 if [ ! -s "$SPEC_CONTEXT" ]; then
-  warn "spec-context.md is empty — review will proceed without Spec context"
+  fail "specanchor-boot produced empty output — cannot review without Spec context"
 fi
 
 printf 'prereview_boot OK: %s\n' "$SPEC_CONTEXT"

@@ -32,7 +32,7 @@
 - [ ] **自动清理只动 owned panes** —— 只能关闭本 skill session 登记过、terminal id 校验通过、且状态为 `done|idle` 的历史 pane。不要按 label、agent name、屏幕内容或 "looks like codex" 扫描关闭。
 - [ ] **Codex 提示符是 `›`（U+203A），不是 ASCII `>`** —— `wait output --match` 注意。SKILL.md 已用兜底两段式 wait。
 - [ ] **`.specanchor/tasks/agent_review_*` 加入仓库 `.gitignore`** —— 不污染项目 git 历史。SKILL.md 假设这点已配置（详见 §配置）。
-- [ ] **每轮开始前 `test -f` 检查上一轮的 findings 文件存在** —— Codex 偶尔会忘写文件直接 done，要早发现早重发。
+- [ ] **每轮开始前 `test -f` 检查上一轮的 review-comments 文件存在** —— Codex 偶尔会忘写文件直接 done，要早发现早重发。
 - [ ] **`wait agent-status --timeout 600000`（10min）是默认值** —— 超大方案 Codex 读取分析可能更久。卡住先去 `pane read` 看实际进度。
 
 ## §已知 bug / 行为怪相（撞上时立刻识别）
@@ -40,7 +40,7 @@
 - [ ] **Codex Plan mode 卡 `working` 不切 `blocked`**（issue #249）—— 已修但旧版仍存在。
       症状：`wait agent-status done` 永不返回，但 pane 里 Codex 实际在等用户按 Enter 确认 plan。
       规避：prompt 模板里**明确禁止 Codex 进入 plan mode**，让它直接写文件后退出。我们当前模板里 "Then stop. Do not start any other work." 就是为这个写的，保留。
-- [ ] **`pane read --source recent` 可能因为软换行截断 YAML** —— SKILL.md 已改成"Codex 把 findings 写文件，Claude 读文件"，不依赖屏幕抓取。**不要回退到 pane read 解析方案。**
+- [ ] **`pane read --source recent` 可能因为软换行截断 YAML** —— SKILL.md 已改成"Codex 把 review comments 写文件，Claude 读文件"，不依赖屏幕抓取。**不要回退到 pane read 解析方案。**
 - [ ] **多 codepoint emoji / 国旗 emoji 在 pane 渲染为空白**（issue #243）—— 不影响功能，但 Claude 看 `pane read` 输出时可能困惑。
 - [ ] **pane background color 改不了**（feature request #242 仍 open）—— 不能用颜色来区分主 / 副面板，只能靠 label。SKILL.md 用 `pane rename` 给 Codex 面板加 `codex-review:<session-id>`；label 只用于人眼识别，不能作为自动化目标。
 - [ ] **Codex 在 plan mode 提问被识别为 `working` 而非 `blocked`**（同 #249）—— SKILL.md 的 prompt 强制 Codex "write file then stop"，避免它问问题。

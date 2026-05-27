@@ -64,7 +64,7 @@ set -a; . "$SESSION_ROOT/session.env"; set +a
 "$SKILL_DIR/scripts/prereview_boot.sh" "$SESSION_ROOT"
 ```
 
-Invokes `specanchor-boot.sh --format=summary`（contract: `$SA_SKILL_DIR/scripts/specanchor-boot.sh`）并写入 `$SESSION_ROOT/spec-context.md`。Boot 失败 → hard fail。输出为空 → soft warn，review 仍继续但 Codex 看不到 Spec Context。
+Invokes `specanchor-boot.sh --format=summary`（contract: `$SA_SKILL_DIR/scripts/specanchor-boot.sh`）并写入 `$SESSION_ROOT/spec-context.md`。Boot 失败 **或** 输出为空 → hard fail（exit 1）。`send_review.sh` 有 belt-and-suspenders 非空断言兜底。
 
 ## Step 1：写 v1.md
 
@@ -179,13 +179,17 @@ echo "[$(date)] CONVERGED at v${N}" >> "$SESSION_ROOT/session.log"
 
 `append_rejected_section.py` 在 final.md 之前再跑一次是必要的：CONVERGED_NO_BLOCKERS 路径下，本轮（round N）的 dispositions 在 Step 6 写完，但 Step 8 因为不是 CONTINUE 没执行，v(N).md 仍是 round N-1 Step 8 产物、不含本轮 rejected/deferred 段。脚本 idempotent，CONVERGED_APPROVE 路径（review_comments: []）只会写空 placeholders，不会破坏什么。
 
-## Step 11.5：Task Spec 转写（Claude 自动执行）
+## Step 11.5：Task Spec 转写（planned — not yet implemented）
 
-读 `$SA_SKILL_DIR/references/commands/task.md` 协议（link-not-copy，不在此 SKILL.md 复述内容）。从 final.md 的 Goals + Affected files 提取 module + slug。创建 `.specanchor/tasks/<module>/YYYY-MM-DD_<slug>.spec.md`。路径写到 `$SESSION_ROOT/.task-spec-path`。失败 → 写 `.task-spec-error`，soft fail（不阻塞 final.md 报告）。
+> **Skip this step until `$SKILL_DIR/scripts/create_task_spec.sh` exists.**
 
-## Step 11.6：sediment 提炼（Claude 自动执行）
+Design intent: 读 `$SA_SKILL_DIR/references/commands/task.md` 协议（link-not-copy）。从 final.md 的 Goals + Affected files 提取 module + slug。创建 `.specanchor/tasks/<module>/YYYY-MM-DD_<slug>.spec.md`。路径写到 `$SESSION_ROOT/.task-spec-path`。失败 → 写 `.task-spec-error`，soft fail。
 
-读所有 `vN.dispositions.yaml`。按 `$SA_SKILL_DIR/references/templates/finding-template.md`（参见 `$SA_SKILL_DIR/references/concepts/findings-ledger.md` §3）格式创建 Finding：
+## Step 11.6：sediment 提炼（planned — not yet implemented）
+
+> **Skip this step until `$SKILL_DIR/scripts/extract_sediment.sh` exists.**
+
+Design intent: 读所有 `vN.dispositions.yaml`。按 `$SA_SKILL_DIR/references/templates/finding-template.md`（参见 `$SA_SKILL_DIR/references/concepts/findings-ledger.md` §3）格式创建 Finding：
 
 - **主筛选**：`disposition=incorporated` 的 review comment，判断语义是否属于 `{fact, contradiction, stale-claim, risk, reuse-opportunity, pattern}` 之一
 - **次筛选**：`disposition=rejected` 的 review comment，其 rejection reason 显式陈述了一个 spec-anchor-relevant 事实 → 提取为 Finding，`visibility=hidden`

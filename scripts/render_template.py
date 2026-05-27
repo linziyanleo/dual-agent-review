@@ -21,7 +21,8 @@ MAX_LINES_DEFAULT = 200
 
 def read_with_budget(file_path: Path, placeholder_name: str) -> str:
     if not file_path.is_file():
-        return ""
+        print(f"ABORT: _FILE injection target not found: {file_path}", file=sys.stderr)
+        sys.exit(1)
     lines = file_path.read_text(encoding="utf-8").splitlines(keepends=True)
     env_key = f"DAR_{placeholder_name}_MAX_LINES"
     max_lines = int(os.environ.get(env_key, MAX_LINES_DEFAULT))

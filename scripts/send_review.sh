@@ -28,6 +28,7 @@ CODEX_PANE="$(cat "$SESSION_ROOT/.codex-pane-id")"
 PLAN_PATH="$SESSION_ROOT/v${ROUND}.md"
 OUTPUT_PATH="$SESSION_ROOT/v${ROUND}.review-comments.yaml"
 [ -f "$PLAN_PATH" ] || fail "missing plan file: $PLAN_PATH"
+[ -s "$SESSION_ROOT/spec-context.md" ] || fail "spec-context.md missing or empty — prereview_boot must produce non-empty output"
 
 if [ "$ROUND" -eq 1 ]; then
   TEMPLATE="$SKILL_DIR/prompts/codex-review-v1.md"

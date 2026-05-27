@@ -46,7 +46,7 @@ Caveat：mid-flow abort（脚本异常 exit / 用户 Ctrl-C）当下不会自动
 - `prompts/review-comments-retry.md` — Codex schema 失败的重写 prompt
 - `prompts/plan-v1-template.md` — v1.md 七段模板
 - `scripts/` — Skill 实现细节，见下节
-- `examples/example-session/` — 一份跑完的样本 session（v1/v1.findings/v1.dispositions/v2/final.md/session.log）
+- `examples/example-session/` — 一份跑完的样本 session（v1/v1.review-comments/v1.dispositions/v2/final.md/session.log）
 - `pitfalls.md` — 避坑清单（每次 session 前过一遍）
 
 ## Skill internals
