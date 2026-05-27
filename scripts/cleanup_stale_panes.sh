@@ -2,16 +2,9 @@
 # Close review panes left behind by previous sessions on the same Claude main terminal
 # and the same workspace. Only closes panes the registry proves we own. Normal path
 # closes done/idle; TTL path force-closes working/blocked panes whose session directory
-# mtime is older than DAR_PANE_TTL_SECS (default 7200s = 2h) — the only available
-# heuristic for "Codex hung mid-review", since herdr doesn't expose last-activity time.
+# mtime is older than DAR_PANE_TTL_SECS (default 7200s = 2h).
 #
-# Scans both the current SESSIONS_ROOT (derived from SESSION_ROOT) and the legacy
-# .plan/sessions root under the session's own recorded CWD. This covers the migration
-# window where a repo gained spec-anchor between sessions: old sessions still live in
-# .plan/sessions, new ones in .specanchor/dual-agent-review/sessions. Root discovery
-# never reads $(pwd) and never depends on an exported SESSIONS_ROOT env var, so the
-# script stays correct under set -u and when invoked with an absolute path from any
-# working directory.
+# Scans .specanchor/tasks/agent_review_*/ directories only.
 #
 # Usage: cleanup_stale_panes.sh <session_root> <main_terminal> <workspace_id>
 set -euo pipefail
@@ -32,7 +25,7 @@ scan_root() {
   local root="$1"
   [ -d "$root" ] || return 0
 
-  find "$root" -mindepth 2 -maxdepth 2 -name session.meta -print 2>/dev/null | while IFS= read -r META; do
+  find "$root" -mindepth 2 -maxdepth 2 -name session.meta -path "*/agent_review_*/session.meta" -print 2>/dev/null | while IFS= read -r META; do
     [ -f "$META" ] || continue
     OLD_ROOT="$(dirname "$META")"
     [ "$OLD_ROOT" = "$SESSION_ROOT" ] && continue
@@ -78,14 +71,3 @@ scan_root() {
 
 CURRENT_ROOT="$(dirname "$SESSION_ROOT")"
 scan_root "$CURRENT_ROOT"
-
-OWN_META="$SESSION_ROOT/session.meta"
-if [ -f "$OWN_META" ]; then
-  OWN_CWD="$(awk -F= '$1=="CWD"{print $2}' "$OWN_META")"
-  if [ -n "$OWN_CWD" ]; then
-    LEGACY_ROOT="$OWN_CWD/.plan/sessions"
-    if [ "$LEGACY_ROOT" != "$CURRENT_ROOT" ]; then
-      scan_root "$LEGACY_ROOT"
-    fi
-  fi
-fi
