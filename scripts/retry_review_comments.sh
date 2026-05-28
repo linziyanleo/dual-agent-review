@@ -46,7 +46,7 @@ PROMPT="$("$SCRIPT_DIR/render_template.py" "$TEMPLATE" \
 # Step 4
 herdr pane send-text "$CODEX_PANE" "$PROMPT"
 herdr pane send-keys "$CODEX_PANE" Enter
-herdr wait agent-status "$CODEX_PANE" --status done --timeout 600000 >/dev/null
+"$SCRIPT_DIR/wait_codex_done.sh" "$SESSION_ROOT" "$OUTPUT_PATH" >/dev/null
 
 # Step 5
 [ -f "$OUTPUT_PATH" ] || fail "Codex retry did not produce $OUTPUT_PATH"

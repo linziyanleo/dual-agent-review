@@ -91,8 +91,7 @@ set -a; . "$SESSION_ROOT/session.env"; set +a  # reload to pick up CODEX_PANE / 
 
 ```bash
 "$SKILL_DIR/scripts/assert_pane_owned.sh" "$SESSION_ROOT"
-CODEX_PANE="$(cat "$SESSION_ROOT/.codex-pane-id")"
-herdr wait agent-status "$CODEX_PANE" --status done --timeout 600000
+"$SKILL_DIR/scripts/wait_codex_done.sh" "$SESSION_ROOT" "$SESSION_ROOT/v1.review-comments.yaml"
 
 if ! "$SKILL_DIR/scripts/validate_review_comments.py" "$SESSION_ROOT/v1.review-comments.yaml" > /tmp/dar.err.$$; then
   ERR="$(cat /tmp/dar.err.$$)"; rm -f /tmp/dar.err.$$
@@ -142,8 +141,7 @@ diff -u "$SESSION_ROOT/v${N}.md" "$SESSION_ROOT/v$((N+1)).md" > "$SESSION_ROOT/v
 ```bash
 "$SKILL_DIR/scripts/send_review.sh" "$SESSION_ROOT" "$((N+1))"
 "$SKILL_DIR/scripts/assert_pane_owned.sh" "$SESSION_ROOT"
-CODEX_PANE="$(cat "$SESSION_ROOT/.codex-pane-id")"
-herdr wait agent-status "$CODEX_PANE" --status done --timeout 600000
+"$SKILL_DIR/scripts/wait_codex_done.sh" "$SESSION_ROOT" "$SESSION_ROOT/v$((N+1)).review-comments.yaml"
 if ! "$SKILL_DIR/scripts/validate_review_comments.py" "$SESSION_ROOT/v$((N+1)).review-comments.yaml" > /tmp/dar.err.$$; then
   ERR="$(cat /tmp/dar.err.$$)"; rm -f /tmp/dar.err.$$
   "$SKILL_DIR/scripts/retry_review_comments.sh" "$SESSION_ROOT" "$((N+1))" "$ERR"
