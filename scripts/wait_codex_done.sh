@@ -9,8 +9,8 @@
 #
 # Usage: wait_codex_done.sh <session_root> <output_path> [--total-timeout SECS]
 #   Default total timeout: 600 seconds (10 min), same as the old behavior.
-#   Each polling cycle uses a 30s agent-status wait so file-based early exit
-#   never lags more than ~30s behind the actual write.
+#   Each polling cycle uses a 120s agent-status wait so file-based early exit
+#   never lags more than ~120s behind the actual write.
 set -euo pipefail
 
 fail() { printf 'ABORT: %s\n' "$*" >&2; exit 1; }
@@ -26,7 +26,7 @@ if [ "${3:-}" = "--total-timeout" ]; then
 fi
 
 CODEX_PANE="$(cat "$SESSION_ROOT/.codex-pane-id")"
-POLL_INTERVAL=30  # seconds per agent-status wait cycle
+POLL_INTERVAL=120  # seconds per agent-status wait cycle
 
 ELAPSED=0
 while [ "$ELAPSED" -lt "$TOTAL_TIMEOUT" ]; do
