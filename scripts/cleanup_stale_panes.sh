@@ -41,8 +41,25 @@ scan_root() {
     OLD_TERMINAL="$(cat "$OLD_ROOT/.codex-terminal-id")"
 
     if ! OLD_INFO="$(herdr pane get "$OLD_PANE" 2>/dev/null)"; then
-      rm -f "$OLD_ROOT/.codex-pane-id" "$OLD_ROOT/.codex-terminal-id"
-      continue
+      # Compact id may have shifted. Resolve via stable terminal_id.
+      OLD_PANE="$(herdr pane list --workspace "$WORKSPACE_ID" 2>/dev/null \
+        | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for p in data['result']['panes']:
+    if p['terminal_id'] == '$OLD_TERMINAL':
+        print(p['pane_id'])
+        break
+" 2>/dev/null)" || true
+      if [ -z "$OLD_PANE" ]; then
+        rm -f "$OLD_ROOT/.codex-pane-id" "$OLD_ROOT/.codex-terminal-id"
+        continue
+      fi
+      printf '%s\n' "$OLD_PANE" > "$OLD_ROOT/.codex-pane-id"
+      OLD_INFO="$(herdr pane get "$OLD_PANE" 2>/dev/null)" || {
+        rm -f "$OLD_ROOT/.codex-pane-id" "$OLD_ROOT/.codex-terminal-id"
+        continue
+      }
     fi
 
     ACTUAL_TERMINAL="$(printf '%s' "$OLD_INFO" | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["terminal_id"])')"

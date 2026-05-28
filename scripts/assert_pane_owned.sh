@@ -17,8 +17,28 @@ SESSION_ROOT="${1:-}"
 CODEX_PANE="$(cat "$SESSION_ROOT/.codex-pane-id")"
 CODEX_TERMINAL="$(cat "$SESSION_ROOT/.codex-terminal-id")"
 
-INFO="$(herdr pane get "$CODEX_PANE" 2>/dev/null)" \
-  || fail "herdr pane get $CODEX_PANE failed; Codex pane vanished?"
+if ! INFO="$(herdr pane get "$CODEX_PANE" 2>/dev/null)"; then
+  # Compact pane id may have shifted after another pane in the same workspace
+  # was closed (herdr re-numbers panes). Resolve via the stable terminal_id.
+  WORKSPACE="$(cat "$SESSION_ROOT/session.meta" | awk -F= '$1=="WORKSPACE_ID"{print $2}')"
+  [ -n "$WORKSPACE" ] || fail "herdr pane get $CODEX_PANE failed and WORKSPACE_ID not in session.meta"
+  RESOLVED="$(herdr pane list --workspace "$WORKSPACE" 2>/dev/null \
+    | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+for p in data['result']['panes']:
+    if p['terminal_id'] == '$CODEX_TERMINAL':
+        print(p['pane_id'])
+        break
+")"
+  [ -n "$RESOLVED" ] \
+    || fail "herdr pane get $CODEX_PANE failed and terminal $CODEX_TERMINAL not found in workspace $WORKSPACE; Codex pane genuinely gone"
+  # Update the saved compact id so subsequent calls don't repeat this lookup.
+  printf '%s\n' "$RESOLVED" > "$SESSION_ROOT/.codex-pane-id"
+  CODEX_PANE="$RESOLVED"
+  INFO="$(herdr pane get "$CODEX_PANE" 2>/dev/null)" \
+    || fail "herdr pane get $CODEX_PANE failed even after resolving from terminal_id"
+fi
 
 ACTUAL="$(printf '%s' "$INFO" | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["terminal_id"])')"
 [ "$ACTUAL" = "$CODEX_TERMINAL" ] \
