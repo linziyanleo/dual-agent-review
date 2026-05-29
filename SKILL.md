@@ -10,7 +10,11 @@ description: "Use when the user has a non-trivial plan/design/architecture and w
 用户说"和我讨论方案 / 出设计 / review 一下" + 任务**非平凡**（多步实现、架构决策、重构、API 设计、性能优化方案）。
 **不适合**：trivial bugfix、单文件改 < 50 行、纯样式调整、纯文案。
 
-> **⛔ 禁止替代路径**：本 skill 的 review 对手方**必须**是 herdr pane 里的 Codex CLI。不要用 `Agent` tool 起 subagent、不要用 `superpowers:requesting-code-review`、不要用任何内置 review 能力来替代。这些都是同模型回声室，不满足独立 review 的设计意图。如果 herdr 或 Codex 不可用，报错给用户，不要 fallback。
+> **⚠️ 两种 review 模式，二选一，由 `REVIEW_MODE` 显式决定**：
+> - `codex`（默认，**强独立**）：review 对手方是 herdr pane 里的 Codex CLI——跨模型独立博弈，本 skill 的设计意图。
+> - `subagent`（**弱独立**，opt-in）：Claude 用 `Agent` tool 起 general-purpose subagent 自检。独立性来自 prompt 角色分离（强对抗）而非模型差异，适合 Codex 不可用或用户只想快速自检。
+>
+> **禁止隐式降级**：codex 模式下若 herdr/Codex 不可用，报错给用户，**不要**自动 fallback 到 subagent——模式切换必须由用户显式发起。仍然禁止用 `superpowers:requesting-code-review` 等其他 skill 绕过本流程。
 
 ## 脚本目录
 
@@ -22,10 +26,13 @@ description: "Use when the user has a non-trivial plan/design/architecture and w
 ```bash
 export SKILL_DIR="$(dirname "$(realpath ~/.claude/skills/dual-agent-review/SKILL.md)")"
 export SA_SKILL_DIR="$HOME/.claude/skills/spec-anchor"
+export REVIEW_MODE="${REVIEW_MODE:-codex}"   # codex=强独立 Codex pane（默认）；subagent=弱独立自检
 set -euo pipefail
 ```
 
 `set -euo pipefail` 必须打开——本 skill 所有 collaborator 脚本都靠 errexit 在第一处失败立刻中断。`check_convergence.py` 是唯一一个用 stdout enum 而非 exit code 表达正常状态的脚本（详见 Step 10），其他脚本一律 exit 0 = 成功 / exit 1 = 失败。
+
+`REVIEW_MODE` 决定 review 对手方：`codex`（默认，强独立，跨模型博弈）或 `subagent`（弱独立，Claude 自起 general-purpose subagent 自检）。用户显式说「用 subagent 自检 / 快速自检 / 不开 pane」时设 `REVIEW_MODE=subagent`；否则保持 codex。
 
 ## 前置：硬检查
 
@@ -74,6 +81,8 @@ Invokes `specanchor-boot.sh --format=summary`（contract: `$SA_SKILL_DIR/scripts
 
 ## Step 2：起 Codex 副面板
 
+> **subagent 模式跳过本步**（不开 pane）。以下 Step 2 仅 codex 模式执行。
+
 ```bash
 "$SKILL_DIR/scripts/spawn_codex.sh" "$SESSION_ROOT"
 set -a; . "$SESSION_ROOT/session.env"; set +a  # reload to pick up CODEX_PANE / CODEX_TERMINAL
@@ -89,6 +98,17 @@ set -a; . "$SESSION_ROOT/session.env"; set +a  # reload to pick up CODEX_PANE / 
 
 内部先 `assert_pane_owned.sh` → 用 `render_template.py prompts/codex-review-v1.md` 渲染（替代 sed，无 shell metachar 问题）→ send-text + send-keys Enter。
 
+**subagent 模式**（替代上面的 send_review）：先用 render_template 渲染自包含 prompt，再用 `Agent` tool 同步调用 general-purpose subagent：
+
+```bash
+PROMPT="$("$SKILL_DIR/scripts/render_template.py" "$SKILL_DIR/prompts/subagent-review-v1.md" \
+  "PLAN_PATH=$SESSION_ROOT/v1.md" \
+  "OUTPUT_PATH=$SESSION_ROOT/v1.review-comments.yaml" \
+  "SPEC_CONTEXT_FILE=$SESSION_ROOT/spec-context.md")"
+```
+
+然后用 `Agent(subagent_type="general-purpose")` 调用，把上面 `$PROMPT` 的**渲染结果文本**作为 prompt 参数。subagent 会读 plan + spec context，自行用 Write 把 YAML 写到 `v1.review-comments.yaml`。**Claude 不代写 review 内容**（保独立性）。
+
 ## Step 4 & 5：等 Codex 完成 + 校验输出
 
 ```bash
@@ -103,6 +123,14 @@ rm -f /tmp/dar.err.$$
 ```
 
 `validate_review_comments.py` 校验 schema（含 `finding_id` 唯一）。retry 失败抛回用户，**不要**再 retry。**为什么不 pane read 抓输出？** Codex 输出会被 TUI 排版、滚动、wrap 影响；文件落盘是唯一可靠的契约。
+
+**subagent 模式**：`Agent` tool 同步返回，**没有「等待」步骤**（跳过 assert_pane_owned + wait_codex_done）。subagent 返回后直接 validate：
+
+```bash
+"$SKILL_DIR/scripts/validate_review_comments.py" "$SESSION_ROOT/v1.review-comments.yaml"
+```
+
+校验失败时，**重起一个 subagent**（不是 Claude 自己改 YAML）：把上面 Step 3 渲染的同一个 `$PROMPT` 末尾追加一句 `IMPORTANT: your previous attempt at <OUTPUT_PATH> failed schema validation with: <错误行>. Rewrite it to satisfy the schema exactly.`，再调一次 `Agent`。**硬上限 1 次**，仍失败抛回用户，不再 retry。
 
 ## Step 6：解析 + disposition
 
@@ -154,6 +182,19 @@ rm -f /tmp/dar.err.$$
 
 ⚠️ **不要重启 Codex**——同一 Codex session 保留上下文，第二轮 prompt 是增量描述，token 远少于重发 plan。`send_review.sh` 第二轮起会自动用 `prompts/codex-review-vn.md` + `vN-1.dispositions.yaml` + `vN.diff`。
 
+**subagent 模式**（替代 send_review + wait）：因 subagent 无状态，用自包含的 `subagent-review-vn.md`，注入 spec context + 完整 plan + 上轮 dispositions + diff：
+
+```bash
+PROMPT="$("$SKILL_DIR/scripts/render_template.py" "$SKILL_DIR/prompts/subagent-review-vn.md" \
+  "PLAN_PATH=$SESSION_ROOT/v$((N+1)).md" \
+  "PREV_DISPOSITION=$SESSION_ROOT/v${N}.dispositions.yaml" \
+  "DIFF_PATH=$SESSION_ROOT/v$((N+1)).diff" \
+  "OUTPUT_PATH=$SESSION_ROOT/v$((N+1)).review-comments.yaml" \
+  "SPEC_CONTEXT_FILE=$SESSION_ROOT/spec-context.md")"
+```
+
+用 `Agent(subagent_type="general-purpose")` 调用渲染结果，subagent 写 `v$((N+1)).review-comments.yaml`。validate + retry 同 Step 4&5 subagent 分支。
+
 ## Step 10：达到 5 轮仍未收敛
 
 **不要继续硬刚**。报告给用户：
@@ -167,6 +208,8 @@ rm -f /tmp/dar.err.$$
 ```
 
 ## Step 11：收敛后
+
+> **subagent 模式跳过 `close_codex_pane.sh`**（无 pane 可关）。append_rejected_section + final.md 软链 + archive_session 照常执行。
 
 ```bash
 "$SKILL_DIR/scripts/append_rejected_section.py" "$SESSION_ROOT" "$SESSION_ROOT/v${N}.md"
@@ -216,4 +259,4 @@ Design intent: 读所有 `vN.dispositions.yaml`。按 `$SA_SKILL_DIR/references/
 4. **硬上限 5 轮** — 两个不同训练的模型对设计永远可能有微小分歧，追求"完全同意"会无限循环。
 5. **不自动执行** — review 完只给报告，等用户 explicit go。
 6. **Codex 只 review，不改文件** — Claude 是 plan owner，避免两人写文件冲突。
-7. **必须走 herdr + Codex CLI** — review 对手方必须是 herdr pane 里的 Codex CLI 实例。**禁止**用 Agent tool 起 subagent 替代 Codex、禁止用 Claude Code 的内置 code-review 能力自我 review、禁止用任何其他 skill（如 `superpowers:requesting-code-review`）绕过本流程。整个收敛循环的价值在于两个**不同模型**通过文件协议独立博弈——subagent 是同模型回声室，不满足独立性要求。
+7. **两种 review 模式，显式选择** — 默认 `codex`：review 对手方是 herdr pane 里的 Codex CLI，两个**不同模型**通过文件协议独立博弈（**强独立**，本 skill 的核心价值）。可选 `subagent`：Claude 用 Agent tool 起 general-purpose subagent，独立性来自 prompt 强对抗角色而非模型差异（**弱独立**，仅在用户显式选择时启用，适合 Codex 不可用或快速自检）。**禁止隐式降级**（codex 不可用不得自动转 subagent），**禁止**用 `superpowers:requesting-code-review` 等其他 skill 绕过本流程。
