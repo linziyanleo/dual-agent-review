@@ -1,8 +1,8 @@
 You are continuing the review loop. The plan has been revised based on your previous findings.
 
-## Spec Context (project norms and constraints)
+## Reminder
 
-{{SPEC_CONTEXT}}
+Spec Context and output YAML schema were provided in the v1 review prompt — they remain in effect for this round. Use the same top-level YAML schema; number findings F-1, F-2... within this round (not across rounds); keep the summary focused on whether the revision is sufficient. Do not deviate from the schema.
 
 ## Task
 
@@ -16,21 +16,6 @@ You are continuing the review loop. The plan has been revised based on your prev
    - Anything still missing that the diff did not address
 
 5. Write your review as strict YAML to: `{{OUTPUT_PATH}}`
-
-## Same schema as v1 review
-
-```yaml
-overall_verdict: approve | request_changes | block
-summary: <2-3 sentences focused on what changed and whether it's now sufficient>
-review_comments:
-  - finding_id: F-1   # use F-1, F-2... within THIS round, not across rounds
-    severity: high | medium | low | nit
-    category: correctness | security | performance | maintainability | scope | testing | unclear-requirements | other
-    location: <section/step, or reference a previous F-id like "re: F-3 from v1">
-    description: ...
-    suggested_change: ...
-    rationale: ...
-```
 
 ## Critical rules for incremental rounds
 

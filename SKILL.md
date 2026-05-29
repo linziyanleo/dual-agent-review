@@ -10,6 +10,8 @@ description: "Use when the user has a non-trivial plan/design/architecture and w
 用户说"和我讨论方案 / 出设计 / review 一下" + 任务**非平凡**（多步实现、架构决策、重构、API 设计、性能优化方案）。
 **不适合**：trivial bugfix、单文件改 < 50 行、纯样式调整、纯文案。
 
+> **⛔ 禁止替代路径**：本 skill 的 review 对手方**必须**是 herdr pane 里的 Codex CLI。不要用 `Agent` tool 起 subagent、不要用 `superpowers:requesting-code-review`、不要用任何内置 review 能力来替代。这些都是同模型回声室，不满足独立 review 的设计意图。如果 herdr 或 Codex 不可用，报错给用户，不要 fallback。
+
 ## 脚本目录
 
 整个流程被抽到 `scripts/` 下。SKILL.md 调用一律走 `"$SKILL_DIR/scripts/xxx.sh"` 形式（**不要** `bash scripts/xxx.sh`——所有 `.sh` 已带 `#!/usr/bin/env bash` shebang + 可执行位）。
@@ -211,3 +213,4 @@ Design intent: 读所有 `vN.dispositions.yaml`。按 `$SA_SKILL_DIR/references/
 4. **硬上限 5 轮** — 两个不同训练的模型对设计永远可能有微小分歧，追求"完全同意"会无限循环。
 5. **不自动执行** — review 完只给报告，等用户 explicit go。
 6. **Codex 只 review，不改文件** — Claude 是 plan owner，避免两人写文件冲突。
+7. **必须走 herdr + Codex CLI** — review 对手方必须是 herdr pane 里的 Codex CLI 实例。**禁止**用 Agent tool 起 subagent 替代 Codex、禁止用 Claude Code 的内置 code-review 能力自我 review、禁止用任何其他 skill（如 `superpowers:requesting-code-review`）绕过本流程。整个收敛循环的价值在于两个**不同模型**通过文件协议独立博弈——subagent 是同模型回声室，不满足独立性要求。

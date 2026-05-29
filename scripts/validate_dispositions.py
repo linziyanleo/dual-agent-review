@@ -109,6 +109,9 @@ def main() -> int:
         return fail(f"{dispositions_path}: file name must match vN.dispositions.yaml")
     expected_version = m.group(1)
     declared_version = dispositions_doc.get("plan_version_reviewed")
+    # Normalize: LLMs often write `plan_version_reviewed: 1` (int) instead of "v1".
+    if isinstance(declared_version, int) or (isinstance(declared_version, str) and declared_version.isdigit()):
+        declared_version = f"v{declared_version}"
     if declared_version != expected_version:
         return fail(
             f"{dispositions_path}: plan_version_reviewed={declared_version!r} but file name implies {expected_version!r}"

@@ -51,6 +51,9 @@ def collect_groups(dispo_files: list[Path], session_root: Path, kind: str):
         if not isinstance(doc, dict):
             continue
         version = doc.get("plan_version_reviewed")
+        # Normalize: LLMs often write `plan_version_reviewed: 1` (int) instead of "v1".
+        if isinstance(version, int) or (isinstance(version, str) and version.isdigit()):
+            version = f"v{version}"
         if not isinstance(version, str):
             continue
 

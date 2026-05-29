@@ -88,6 +88,32 @@ printf '{{SPEC_CONTEXT}}\n' > "$INJECT_TPL"
 "$SCRIPT_DIR/render_template.py" "$INJECT_TPL" 2>/dev/null && die "unresolved SPEC_CONTEXT should fail" || pass "unresolved {{SPEC_CONTEXT}} -> exit 1"
 
 # ─────────────────────────────────────────────────────────────────────────────
+step "render_template.py — vN template renders without SPEC_CONTEXT_FILE"
+
+VN_TPL="$SKILL_DIR/prompts/codex-review-vn.md"
+VN_DUMMY_PLAN="$WORKDIR/vn_plan.md"
+VN_DUMMY_DISPO="$WORKDIR/vn_dispo.yaml"
+VN_DUMMY_DIFF="$WORKDIR/vn.diff"
+printf 'dummy plan\n' > "$VN_DUMMY_PLAN"
+printf 'dummy dispo\n' > "$VN_DUMMY_DISPO"
+printf 'dummy diff\n' > "$VN_DUMMY_DIFF"
+VN_OUT="$("$SCRIPT_DIR/render_template.py" "$VN_TPL" \
+  "PLAN_PATH=$VN_DUMMY_PLAN" \
+  "PREV_DISPOSITION=$VN_DUMMY_DISPO" \
+  "DIFF_PATH=$VN_DUMMY_DIFF" \
+  "OUTPUT_PATH=$WORKDIR/vn_output.yaml")" || die "vN template render failed without SPEC_CONTEXT_FILE"
+pass "vN template renders without SPEC_CONTEXT_FILE"
+
+case "$VN_OUT" in *'{{SPEC_CONTEXT}}'*) die "unresolved {{SPEC_CONTEXT}} in rendered vN" ;; esac
+pass "no unresolved {{SPEC_CONTEXT}} token in vN output"
+
+case "$VN_OUT" in *'## Same schema'*) die "repeated schema heading found in vN" ;; esac
+pass "no repeated schema heading in vN output"
+
+case "$VN_OUT" in *'## Reminder'*) ;; *) die "missing Reminder section in vN" ;; esac
+pass "vN contains Reminder section"
+
+# ─────────────────────────────────────────────────────────────────────────────
 step "validate_review_comments.py — 5 broken fixtures + happy path"
 fixture_dir="$WORKDIR/findings"
 mkdir -p "$fixture_dir"
@@ -260,6 +286,17 @@ dispositions:
   - {finding_id: F-2, disposition: rejected, reason: nope}
 YAML
 "$SCRIPT_DIR/validate_dispositions.py" "$HAPPY_FINDINGS" "$dd/v1.dispositions.yaml" >/dev/null && die "version mismatch should fail" || pass "plan_version_reviewed mismatch -> fail"
+
+# (7b) plan_version_reviewed as bare integer (LLM writes 1 instead of "v1") should pass
+cat > "$dd/v1.dispositions.yaml" <<'YAML'
+plan_version_reviewed: 1
+total_review_comments: 2
+dispositions:
+  - {finding_id: F-1, disposition: incorporated, plan_change_summary: did the thing}
+  - {finding_id: F-2, disposition: rejected, reason: not relevant}
+YAML
+"$SCRIPT_DIR/validate_dispositions.py" "$HAPPY_FINDINGS" "$dd/v1.dispositions.yaml" || die "bare int plan_version_reviewed should be normalized"
+pass "plan_version_reviewed: 1 (int) normalized to v1 -> pass"
 
 # (8) incorporated without plan_change_summary
 cat > "$dd/v1.dispositions.yaml" <<'YAML'

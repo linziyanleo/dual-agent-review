@@ -47,8 +47,7 @@ else
     "PLAN_PATH=$PLAN_PATH" \
     "PREV_DISPOSITION=$PREV_DISPO" \
     "DIFF_PATH=$DIFF_PATH" \
-    "OUTPUT_PATH=$OUTPUT_PATH" \
-    "SPEC_CONTEXT_FILE=$SESSION_ROOT/spec-context.md")"
+    "OUTPUT_PATH=$OUTPUT_PATH")"
 fi
 
 herdr pane send-text "$CODEX_PANE" "$PROMPT"
