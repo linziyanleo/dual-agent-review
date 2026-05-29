@@ -933,5 +933,24 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
+step "subagent-review-v1.md — renders with SPEC_CONTEXT_FILE + PLAN_PATH + OUTPUT_PATH"
+SUB_V1_TPL="$SKILL_DIR/prompts/subagent-review-v1.md"
+[ -f "$SUB_V1_TPL" ] || die "subagent-review-v1.md not found at $SUB_V1_TPL"
+SUB_V1_PLAN="$WORKDIR/sub_v1_plan.md"
+SUB_V1_CTX="$WORKDIR/sub_v1_ctx.md"
+printf 'dummy plan\n' > "$SUB_V1_PLAN"
+printf 'ctx alpha\nctx beta\n' > "$SUB_V1_CTX"
+SUB_V1_OUT="$("$SCRIPT_DIR/render_template.py" "$SUB_V1_TPL" \
+  "PLAN_PATH=$SUB_V1_PLAN" \
+  "OUTPUT_PATH=$WORKDIR/sub_v1_output.yaml" \
+  "SPEC_CONTEXT_FILE=$SUB_V1_CTX")" || die "subagent-review-v1 render failed"
+case "$SUB_V1_OUT" in *'{{SPEC_CONTEXT}}'*) die "unresolved {{SPEC_CONTEXT}} in subagent-review-v1" ;; esac
+case "$SUB_V1_OUT" in *'{{PLAN_PATH}}'*) die "unresolved {{PLAN_PATH}} in subagent-review-v1" ;; esac
+case "$SUB_V1_OUT" in *'{{OUTPUT_PATH}}'*) die "unresolved {{OUTPUT_PATH}} in subagent-review-v1" ;; esac
+case "$SUB_V1_OUT" in *'ctx alpha'*'ctx beta'*) ;; *) die "spec context not injected into subagent-review-v1" ;; esac
+case "$SUB_V1_OUT" in *'adversarial reviewer'*) ;; *) die "subagent-review-v1 missing adversarial-role framing" ;; esac
+pass "subagent-review-v1 renders, no unresolved tokens, adversarial framing present"
+
+# ─────────────────────────────────────────────────────────────────────────────
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
