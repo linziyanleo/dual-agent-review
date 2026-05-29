@@ -888,5 +888,50 @@ ROUND_TRIP="$(bash -c "$QUOTED; printf %s \"\$VAR\"")"
 pass "POSIX single-quote escape preserves apos + space round-trip"
 
 # ─────────────────────────────────────────────────────────────────────────────
+step "preflight.sh — REVIEW_MODE=subagent skips codex CLI check"
+# Hermetic isolated bin: real tool symlinks (no codex), plus a stub herdr.
+pf_iso="$WORKDIR/pf_iso_bin"
+mkdir -p "$pf_iso"
+for c in bash env python3 grep head tr date sed cat; do
+  p="$(command -v "$c" 2>/dev/null)" && ln -sf "$p" "$pf_iso/$c"
+done
+# python3 may be a pyenv/venv shim that can't resolve under an isolated PATH;
+# symlink the real interpreter so preflight's pyyaml hard-check runs hermetically.
+ln -sf "$(python3 -c 'import sys; print(sys.executable)')" "$pf_iso/python3"
+cat > "$pf_iso/herdr" <<'H'
+#!/usr/bin/env bash
+exit 0
+H
+chmod +x "$pf_iso/herdr"
+# NOTE: deliberately NO codex in $pf_iso
+
+# Fake SA_SKILL_DIR with the two files preflight hard-checks.
+pf_sa="$WORKDIR/pf_sa"
+mkdir -p "$pf_sa/scripts"
+: > "$pf_sa/SKILL.md"
+: > "$pf_sa/scripts/specanchor-boot.sh"
+
+# Fake repo with anchor.yaml (default task_specs) + .specanchor/
+pf_repo="$WORKDIR/pf_repo"
+mkdir -p "$pf_repo/.specanchor"
+printf 'paths:\n  task_specs: .specanchor/tasks\n' > "$pf_repo/anchor.yaml"
+
+# subagent mode: must pass even though codex is absent from PATH
+if ( cd "$pf_repo" && HERDR_ENV=1 HERDR_PANE_ID=p REVIEW_MODE=subagent \
+     SA_SKILL_DIR="$pf_sa" PATH="$pf_iso" "$SCRIPT_DIR/preflight.sh" >/dev/null 2>&1 ); then
+  pass "preflight subagent mode OK without codex on PATH"
+else
+  die "preflight subagent mode should pass without codex, but it failed"
+fi
+
+# codex mode: same env must FAIL because codex is absent
+if ( cd "$pf_repo" && HERDR_ENV=1 HERDR_PANE_ID=p REVIEW_MODE=codex \
+     SA_SKILL_DIR="$pf_sa" PATH="$pf_iso" "$SCRIPT_DIR/preflight.sh" >/dev/null 2>&1 ); then
+  die "preflight codex mode should FAIL without codex on PATH, but it passed"
+else
+  pass "preflight codex mode correctly fails without codex"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

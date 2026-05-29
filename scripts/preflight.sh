@@ -5,11 +5,15 @@ set -euo pipefail
 fail() { printf 'ABORT: %s\n' "$*" >&2; exit 1; }
 warn() { printf 'WARN: %s\n' "$*" >&2; }
 
+REVIEW_MODE="${REVIEW_MODE:-codex}"
+
 [ "${HERDR_ENV:-}" = "1" ]   || fail "not running inside herdr (HERDR_ENV != 1)"
 [ -n "${HERDR_PANE_ID:-}" ]  || fail "HERDR_PANE_ID not injected; cannot locate Claude main pane"
 
 command -v herdr   >/dev/null 2>&1 || fail "herdr CLI not on PATH"
-command -v codex   >/dev/null 2>&1 || fail "codex CLI not on PATH"
+if [ "$REVIEW_MODE" = "codex" ]; then
+  command -v codex >/dev/null 2>&1 || fail "codex CLI not on PATH"
+fi
 command -v python3 >/dev/null 2>&1 || fail "python3 not on PATH"
 
 python3 -c 'import yaml' >/dev/null 2>&1 || fail "PyYAML not importable (pip install pyyaml)"
@@ -40,10 +44,13 @@ case "$TASK_SPECS_CHECK" in
     ;;
 esac
 
-# herdr integration status check — soft warn.
-INTEG_STATUS="$(herdr integration status 2>&1 || true)"
-printf '%s\n' "$INTEG_STATUS" | grep -q 'codex: current'  || warn "codex integration may be missing/stale; agent_status detection will degrade"
-printf '%s\n' "$INTEG_STATUS" | grep -q 'claude: current' || warn "claude integration may be missing/stale"
+# herdr integration status check — soft warn (codex mode only; subagent mode
+# does not use herdr agent_status detection).
+if [ "$REVIEW_MODE" = "codex" ]; then
+  INTEG_STATUS="$(herdr integration status 2>&1 || true)"
+  printf '%s\n' "$INTEG_STATUS" | grep -q 'codex: current'  || warn "codex integration may be missing/stale; agent_status detection will degrade"
+  printf '%s\n' "$INTEG_STATUS" | grep -q 'claude: current' || warn "claude integration may be missing/stale"
+fi
 
 # Legacy layout soft warning
 [ ! -d "$(pwd)/.plan/sessions" ] || warn ".plan/sessions/ detected — legacy DAR layout; consider removing after migration"
