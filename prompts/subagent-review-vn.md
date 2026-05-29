@@ -40,6 +40,13 @@ review_comments:
 
 Number findings F-1, F-2... within THIS round (not across rounds).
 
+## Severity guidance
+
+- **high**: plan will produce broken / insecure / wrong behavior if executed as-is
+- **medium**: plan will work but has clear quality/maintainability/scope problems
+- **low**: improvement worth doing but not blocking
+- **nit**: style / wording / minor — use sparingly, this is not a syntax review
+
 ## Critical rules for incremental rounds
 
 - **Do NOT re-raise issues you've already raised** unless the fix is genuinely wrong or insufficient. If the author said "rejected because X" and X is reasonable, accept it and move on. Re-raising settled items is what makes loops fail to converge.

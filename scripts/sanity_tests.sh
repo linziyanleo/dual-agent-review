@@ -976,6 +976,7 @@ case "$SUB_VN_OUT" in *'ctx gamma'*) ;; *) die "spec context not injected into s
 # Self-contained: must carry its own schema (subagent is stateless across rounds)
 case "$SUB_VN_OUT" in *'overall_verdict:'*'review_comments:'*) ;; *) die "subagent-review-vn must inline the full schema (stateless reviewer)" ;; esac
 case "$SUB_VN_OUT" in *'adversarial reviewer'*) ;; *) die "subagent-review-vn missing adversarial-role framing" ;; esac
+case "$SUB_VN_OUT" in *'Severity guidance'*) ;; *) die "subagent-review-vn must inline severity rubric (stateless reviewer can't recover it)" ;; esac
 pass "subagent-review-vn renders self-contained with schema + spec context + adversarial framing"
 
 # ─────────────────────────────────────────────────────────────────────────────
