@@ -33,6 +33,7 @@ shquote() {
 SAFE_MAIN_PANE="$(printf '%s' "$HERDR_PANE_ID" | tr -c 'A-Za-z0-9_.-' '-')"
 RAND_SUFFIX="$(python3 -c 'import secrets; print(secrets.token_hex(2))')"
 SESSION_ID="agent_review_$(date +%Y%m%d-%H%M%S)-pane-${SAFE_MAIN_PANE}-${RAND_SUFFIX}"
+REVIEW_MODE="${REVIEW_MODE:-codex}"
 
 CWD="$(pwd)"
 
@@ -52,6 +53,7 @@ mkdir -p "$SESSION_ROOT"
   printf 'TAB_ID=%s\n'         "$TAB_ID"
   printf 'CWD=%s\n'            "$CWD"
   printf 'SA_SKILL_DIR=%s\n'  "${SA_SKILL_DIR:-}"
+  printf 'REVIEW_MODE=%s\n'   "$REVIEW_MODE"
 } > "$SESSION_ROOT/session.meta"
 
 # Shell-loadable env file. Variable names are FIXED here; only values come from herdr.
@@ -65,6 +67,7 @@ mkdir -p "$SESSION_ROOT"
   printf 'TAB_ID=%s\n'         "$(shquote "$TAB_ID")"
   printf 'CWD=%s\n'            "$(shquote "$CWD")"
   printf 'SA_SKILL_DIR=%s\n'  "$(shquote "${SA_SKILL_DIR:-}")"
+  printf 'REVIEW_MODE=%s\n'   "$(shquote "$REVIEW_MODE")"
 } > "$SESSION_ROOT/session.env"
 
 herdr pane list --workspace "$WORKSPACE_ID" > "$SESSION_ROOT/workspace-panes.before.json"

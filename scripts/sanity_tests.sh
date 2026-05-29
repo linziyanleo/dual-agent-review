@@ -798,6 +798,23 @@ grep -q "SA_SKILL_DIR='/tmp/fake-sa'" "$SR/session.env" \
   || die "session.env SA_SKILL_DIR value wrong: $(grep SA_SKILL_DIR "$SR/session.env")"
 pass "init_session -> .specanchor/tasks/agent_review_* + SA_SKILL_DIR in session.env"
 
+# REVIEW_MODE defaults to 'codex' when unset
+grep -q "REVIEW_MODE='codex'" "$SR/session.env" \
+  || die "session.env REVIEW_MODE should default to 'codex', got: $(grep REVIEW_MODE "$SR/session.env" || echo MISSING)"
+grep -q "REVIEW_MODE=codex" "$SR/session.meta" \
+  || die "session.meta missing REVIEW_MODE=codex"
+pass "init_session default REVIEW_MODE=codex in meta+env"
+
+# REVIEW_MODE=subagent is persisted when set
+SR_SUB="$(cd "$WORKDIR/repo-specanchor" && \
+  HERDR_PANE_ID=p_a SA_SKILL_DIR=/tmp/fake-sa REVIEW_MODE=subagent \
+  PATH="$case_a_shim:$PATH" "$SCRIPT_DIR/init_session.sh")"
+grep -q "REVIEW_MODE='subagent'" "$SR_SUB/session.env" \
+  || die "session.env should persist REVIEW_MODE='subagent', got: $(grep REVIEW_MODE "$SR_SUB/session.env" || echo MISSING)"
+grep -q "REVIEW_MODE=subagent" "$SR_SUB/session.meta" \
+  || die "session.meta should persist REVIEW_MODE=subagent"
+pass "init_session persists REVIEW_MODE=subagent in meta+env"
+
 # ─────────────────────────────────────────────────────────────────────────────
 step "cleanup_stale_panes.sh — agent_review_* filter (only scans matching dirs)"
 case_d_repo="$WORKDIR/case_d_repo"
