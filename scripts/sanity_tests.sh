@@ -952,5 +952,32 @@ case "$SUB_V1_OUT" in *'adversarial reviewer'*) ;; *) die "subagent-review-v1 mi
 pass "subagent-review-v1 renders, no unresolved tokens, adversarial framing present"
 
 # ─────────────────────────────────────────────────────────────────────────────
+step "subagent-review-vn.md — renders self-contained (schema + spec context + diff + dispo)"
+SUB_VN_TPL="$SKILL_DIR/prompts/subagent-review-vn.md"
+[ -f "$SUB_VN_TPL" ] || die "subagent-review-vn.md not found at $SUB_VN_TPL"
+SUB_VN_PLAN="$WORKDIR/sub_vn_plan.md"
+SUB_VN_CTX="$WORKDIR/sub_vn_ctx.md"
+SUB_VN_DISPO="$WORKDIR/sub_vn_dispo.yaml"
+SUB_VN_DIFF="$WORKDIR/sub_vn.diff"
+printf 'dummy plan v2\n' > "$SUB_VN_PLAN"
+printf 'ctx gamma\n'     > "$SUB_VN_CTX"
+printf 'dummy dispo\n'   > "$SUB_VN_DISPO"
+printf 'dummy diff\n'    > "$SUB_VN_DIFF"
+SUB_VN_OUT="$("$SCRIPT_DIR/render_template.py" "$SUB_VN_TPL" \
+  "PLAN_PATH=$SUB_VN_PLAN" \
+  "PREV_DISPOSITION=$SUB_VN_DISPO" \
+  "DIFF_PATH=$SUB_VN_DIFF" \
+  "OUTPUT_PATH=$WORKDIR/sub_vn_output.yaml" \
+  "SPEC_CONTEXT_FILE=$SUB_VN_CTX")" || die "subagent-review-vn render failed"
+for tok in '{{SPEC_CONTEXT}}' '{{PLAN_PATH}}' '{{PREV_DISPOSITION}}' '{{DIFF_PATH}}' '{{OUTPUT_PATH}}'; do
+  case "$SUB_VN_OUT" in *"$tok"*) die "unresolved $tok in subagent-review-vn" ;; esac
+done
+case "$SUB_VN_OUT" in *'ctx gamma'*) ;; *) die "spec context not injected into subagent-review-vn" ;; esac
+# Self-contained: must carry its own schema (subagent is stateless across rounds)
+case "$SUB_VN_OUT" in *'overall_verdict:'*'review_comments:'*) ;; *) die "subagent-review-vn must inline the full schema (stateless reviewer)" ;; esac
+case "$SUB_VN_OUT" in *'adversarial reviewer'*) ;; *) die "subagent-review-vn missing adversarial-role framing" ;; esac
+pass "subagent-review-vn renders self-contained with schema + spec context + adversarial framing"
+
+# ─────────────────────────────────────────────────────────────────────────────
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
