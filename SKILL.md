@@ -173,11 +173,14 @@ rm -f /tmp/dar.err.$$
 ln -sfn "v${N}.md" "$SESSION_ROOT/final.md"
 echo "[$(date)] CONVERGED at v${N}" >> "$SESSION_ROOT/session.log"
 "$SKILL_DIR/scripts/close_codex_pane.sh" "$SESSION_ROOT"
+SESSION_ROOT="$("$SKILL_DIR/scripts/archive_session.sh" "$SESSION_ROOT")"
 ```
 
 `close_codex_pane.sh` 只在 status ∈ {done, idle, unknown} 时关 pane；working/blocked 留着供 inspection。需强关 pass `--force`：`"$SKILL_DIR/scripts/close_codex_pane.sh" "$SESSION_ROOT" --force`（写 `FORCE_CLOSED` 到 session.log）。
 
 `append_rejected_section.py` 在 final.md 之前再跑一次是必要的：CONVERGED_NO_BLOCKERS 路径下，本轮（round N）的 dispositions 在 Step 6 写完，但 Step 8 因为不是 CONTINUE 没执行，v(N).md 仍是 round N-1 Step 8 产物、不含本轮 rejected/deferred 段。脚本 idempotent，CONVERGED_APPROVE 路径（review_comments: []）只会写空 placeholders，不会破坏什么。
+
+`archive_session.sh` 把收敛后的会话目录从 `.specanchor/tasks/` 移到 `.specanchor/archive/`，使 tasks/ 只保留活跃会话和持久性 task spec，归档会话不再被 `cleanup_stale_panes.sh` 扫描。脚本要求 `final.md` 存在（未收敛的会话不能归档）。归档后 `SESSION_ROOT` 更新为新路径。
 
 ## Step 11.5：Task Spec 转写（planned — not yet implemented）
 

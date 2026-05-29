@@ -2,3 +2,4 @@
 .plan/
 *.log
 .specanchor/tasks/agent_review_*
+.specanchor/archive/
