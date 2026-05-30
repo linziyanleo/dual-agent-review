@@ -31,6 +31,8 @@ fi
 
 CODEX_PANE="$(cat "$SESSION_ROOT/.codex-pane-id")"
 POLL_INTERVAL=300  # seconds per agent-status wait cycle
+GRACE_SECS=20      # after "done" fires, tolerate this much fs-flush / event lead time
+                   # before the output file must appear (see done-handling below)
 
 # Current agent_status for the Codex pane ("working"/"done"/"idle"/...), or
 # "unknown" when herdr is unreachable or returns unparseable JSON.
@@ -52,11 +54,26 @@ while [ "$ELAPSED" -lt "$TOTAL_TIMEOUT" ] || [ "$(codex_agent_status)" = "workin
     exit 0
   fi
 
-  # Short agent-status wait. Exit 0 = status reached; exit 1 = timeout.
+  # Short agent-status wait. Exit 0 = "done" reached; exit 1 = timeout (Codex
+  # still working / herdr unreachable) — in which case we loop and re-check.
   WAIT_MS=$(( POLL_INTERVAL * 1000 ))
   if herdr wait agent-status "$CODEX_PANE" --status done --timeout "$WAIT_MS" >/dev/null 2>&1; then
-    printf 'agent_done\n'
-    exit 0
+    # "done" is a hint, not proof of completion: Codex sometimes ends its turn
+    # without writing the deliverable (pitfalls.md §运行时). The output file is
+    # the only authoritative success signal — grace-poll it for fs-flush / event
+    # lead time before deciding.
+    for _ in $(seq 1 "$GRACE_SECS"); do
+      if [ -f "$OUTPUT_PATH" ] && [ -s "$OUTPUT_PATH" ]; then
+        printf 'file_ready\n'
+        exit 0
+      fi
+      sleep 1
+    done
+    # Grace elapsed, still no file. If Codex resumed working it was a mid-task
+    # turn boundary — keep waiting. Otherwise it stopped without output: break to
+    # the final check + fail so the caller can resend instead of proceeding on a
+    # phantom success.
+    [ "$(codex_agent_status)" = "working" ] || break
   fi
 
   ELAPSED=$(( ELAPSED + POLL_INTERVAL ))
