@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """Validate a Codex review-comments YAML against the dual-agent-review schema.
 
-Usage: validate_review_comments.py <review_comments_path>
+Usage: validate_review_comments.py [--role ROLE] <review_comments_path>
+
+--role: Optional. When omitted (None), uses the union of all role category sets
+        (for validating canonical merged files). When provided, restricts to that
+        role's category subset.
 
 Exit 0 on success (no stdout). Exit 1 with a single human-readable error line on
 stdout — the line is embedded directly into the retry prompt template, so it must
 stand alone and name the file + the broken field path.
 """
+import argparse
 import sys
 from pathlib import Path
 
@@ -19,10 +24,22 @@ except ImportError:
 
 VERDICTS = {"approve", "request_changes", "block"}
 SEVERITIES = {"high", "medium", "low", "nit"}
-CATEGORIES = {
-    "correctness", "security", "performance", "maintainability",
-    "scope", "testing", "unclear-requirements", "other",
+
+ROLE_CATEGORIES = {
+    "plan-correctness": {
+        "correctness", "security", "performance", "maintainability",
+        "scope", "testing", "unclear-requirements", "other",
+    },
+    "spec-completeness": {
+        "spec-gap", "contract-ambiguity", "correctness",
+        "scope", "unclear-requirements", "other",
+    },
 }
+
+ALL_CATEGORIES = set()
+for _cats in ROLE_CATEGORIES.values():
+    ALL_CATEGORIES |= _cats
+
 REQUIRED_FINDING_KEYS = (
     "finding_id", "severity", "category", "location",
     "description", "suggested_change", "rationale",
@@ -35,10 +52,13 @@ def fail(msg: str) -> int:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("usage: validate_review_comments.py <path>", file=sys.stderr)
-        return 1
-    path = Path(sys.argv[1])
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--role", default=None, choices=list(ROLE_CATEGORIES.keys()))
+    parser.add_argument("path")
+    args = parser.parse_args()
+
+    categories = ROLE_CATEGORIES[args.role] if args.role else ALL_CATEGORIES
+    path = Path(args.path)
     if not path.is_file():
         return fail(f"{path}: file does not exist")
 
@@ -78,8 +98,8 @@ def main() -> int:
                 return fail(f"{path}: {loc}.{k} must be a non-empty string")
         if f["severity"] not in SEVERITIES:
             return fail(f"{path}: {loc}.severity must be one of {sorted(SEVERITIES)}, got {f['severity']!r}")
-        if f["category"] not in CATEGORIES:
-            return fail(f"{path}: {loc}.category must be one of {sorted(CATEGORIES)}, got {f['category']!r}")
+        if f["category"] not in categories:
+            return fail(f"{path}: {loc}.category must be one of {sorted(categories)}, got {f['category']!r}")
         fid = f["finding_id"]
         if fid in seen_ids:
             return fail(f"{path}: duplicate finding_id {fid!r} at review_comments[{i}] and review_comments[{seen_ids[fid]}]")

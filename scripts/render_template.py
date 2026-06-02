@@ -10,9 +10,10 @@ the placeholder name (e.g. SPEC_CONTEXT_FILE -> {{SPEC_CONTEXT}}), the file at
 Budget: file content is truncated to N lines (default 200, override via
 DAR_<PLACEHOLDER>_MAX_LINES env var, e.g. DAR_SPEC_CONTEXT_MAX_LINES=300).
 
-After all replacements, asserts no unresolved {{SPEC_CONTEXT}} tokens remain.
+After all replacements, asserts no unresolved {{...}} tokens remain.
 """
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -68,8 +69,9 @@ def main() -> int:
     for k, v in pairs:
         text = text.replace("{{" + k + "}}", v)
 
-    if "{{SPEC_CONTEXT}}" in text:
-        print("ABORT: unresolved {{SPEC_CONTEXT}} token in rendered output", file=sys.stderr)
+    unresolved = re.findall(r"\{\{[A-Z_]+\}\}", text)
+    if unresolved:
+        print(f"ABORT: unresolved placeholder(s) in rendered output: {', '.join(sorted(set(unresolved)))}", file=sys.stderr)
         return 1
 
     sys.stdout.write(text)
