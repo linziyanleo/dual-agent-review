@@ -7,12 +7,24 @@ warn() { printf 'WARN: %s\n' "$*" >&2; }
 
 REVIEW_MODE="${REVIEW_MODE:-codex}"
 
-[ "${HERDR_ENV:-}" = "1" ]   || fail "not running inside herdr (HERDR_ENV != 1)"
-[ -n "${HERDR_PANE_ID:-}" ]  || fail "HERDR_PANE_ID not injected; cannot locate Claude main pane"
+SKILL_DIR="${SKILL_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 
-command -v herdr   >/dev/null 2>&1 || fail "herdr CLI not on PATH"
-if [ "$REVIEW_MODE" = "codex" ]; then
+if [ "$REVIEW_MODE" = "subagent" ]; then
+  : # subagent mode does not need herdr or codex
+elif [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
+  : # normal path — env vars already injected by herdr
+  command -v herdr >/dev/null 2>&1 || fail "herdr CLI not on PATH"
   command -v codex >/dev/null 2>&1 || fail "codex CLI not on PATH"
+elif command -v herdr >/dev/null 2>&1; then
+  # herdr CLI available but env vars missing — try auto-detect
+  if eval "$("$SKILL_DIR/scripts/resolve_herdr_env.sh" 2>/dev/null)"; then
+    warn "auto-detected HERDR_PANE_ID=$HERDR_PANE_ID via herdr agent list"
+  else
+    fail "HERDR_ENV/HERDR_PANE_ID not set, and auto-detection failed for cwd=$(pwd). Ensure herdr integration is installed (herdr integration install claude) or set REVIEW_MODE=subagent."
+  fi
+  command -v codex >/dev/null 2>&1 || fail "codex CLI not on PATH"
+else
+  fail "not running inside herdr (HERDR_ENV != 1) and herdr CLI not on PATH. Set REVIEW_MODE=subagent for non-herdr environments."
 fi
 command -v python3 >/dev/null 2>&1 || fail "python3 not on PATH"
 

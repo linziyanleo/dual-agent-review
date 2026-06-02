@@ -869,8 +869,14 @@ pass "D: only agent_review_* dirs scanned; unrelated dirs ignored"
 # ─────────────────────────────────────────────────────────────────────────────
 # init_session.sh requires HERDR_ENV + a live herdr server, so it can't run in
 # this sandbox. Still verify it parses and rejects missing HERDR_PANE_ID.
-step "init_session.sh — refuses without HERDR_PANE_ID"
-( unset HERDR_PANE_ID; "$SCRIPT_DIR/init_session.sh" >/dev/null 2>&1 ) && die "init_session should fail without HERDR_PANE_ID" || pass "no HERDR_PANE_ID -> abort"
+step "init_session.sh — subagent mode works without HERDR_PANE_ID"
+_SUBAGENT_OUT="$(REVIEW_MODE=subagent env -u HERDR_PANE_ID -u HERDR_ENV "$SCRIPT_DIR/init_session.sh" 2>/dev/null)" || die "init_session should succeed in subagent mode without HERDR_PANE_ID"
+echo "$_SUBAGENT_OUT" | grep -q 'agent_review_.*-pane-subagent-' || die "subagent session ID should contain -pane-subagent-"
+_SUBAGENT_ENV="$_SUBAGENT_OUT/session.env"
+grep -q "MAIN_PANE='subagent-virtual'" "$_SUBAGENT_ENV" || die "subagent session.env should have MAIN_PANE=subagent-virtual"
+grep -q "REVIEW_MODE='subagent'" "$_SUBAGENT_ENV" || die "subagent session.env should have REVIEW_MODE=subagent"
+rm -rf "$_SUBAGENT_OUT"
+pass "subagent mode without HERDR_PANE_ID -> OK"
 
 # Smoke-test the POSIX single-quote escape function in init_session.sh against a
 # value with apostrophes + spaces, by sourcing init_session.sh's escape logic

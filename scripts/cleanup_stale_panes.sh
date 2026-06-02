@@ -19,6 +19,11 @@ WORKSPACE_ID="${3:-}"
 [ -n "$MAIN_TERMINAL" ] || fail "missing arg 2: main_terminal"
 [ -n "$WORKSPACE_ID"  ] || fail "missing arg 3: workspace_id"
 
+# subagent mode has no panes to clean up
+if [ "$MAIN_TERMINAL" = "subagent-virtual" ]; then
+  exit 0
+fi
+
 TTL_SECS="${DAR_PANE_TTL_SECS:-7200}"
 
 scan_root() {

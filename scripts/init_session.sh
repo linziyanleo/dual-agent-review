@@ -8,14 +8,29 @@ set -euo pipefail
 
 fail() { printf 'ABORT: %s\n' "$*" >&2; exit 1; }
 
-[ -n "${HERDR_PANE_ID:-}" ] || fail "HERDR_PANE_ID not set"
+SKILL_DIR="${SKILL_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+REVIEW_MODE="${REVIEW_MODE:-codex}"
 
 # Use stderr for any progress noise; stdout is reserved for SESSION_ROOT.
 
-MAIN_INFO="$(herdr pane get "$HERDR_PANE_ID")"
-MAIN_TERMINAL="$(printf '%s' "$MAIN_INFO" | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["terminal_id"])')"
-WORKSPACE_ID="$(printf '%s' "$MAIN_INFO"  | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["workspace_id"])')"
-TAB_ID="$(printf '%s' "$MAIN_INFO"        | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["tab_id"])')"
+if [ "$REVIEW_MODE" = "subagent" ]; then
+  MAIN_TERMINAL="subagent-virtual"
+  WORKSPACE_ID="subagent-virtual"
+  TAB_ID="subagent-virtual"
+elif [ -n "${HERDR_PANE_ID:-}" ]; then
+  MAIN_INFO="$(herdr pane get "$HERDR_PANE_ID")"
+  MAIN_TERMINAL="$(printf '%s' "$MAIN_INFO" | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["terminal_id"])')"
+  WORKSPACE_ID="$(printf '%s' "$MAIN_INFO"  | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["workspace_id"])')"
+  TAB_ID="$(printf '%s' "$MAIN_INFO"        | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["tab_id"])')"
+else
+  # Auto-detect via herdr agent list
+  DETECTED="$("$SKILL_DIR/scripts/resolve_herdr_env.sh" 2>&2)" || fail "HERDR_PANE_ID not set and auto-detection failed"
+  eval "$DETECTED"
+  MAIN_INFO="$(herdr pane get "$HERDR_PANE_ID")"
+  MAIN_TERMINAL="$(printf '%s' "$MAIN_INFO" | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["terminal_id"])')"
+  WORKSPACE_ID="$(printf '%s' "$MAIN_INFO"  | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["workspace_id"])')"
+  TAB_ID="$(printf '%s' "$MAIN_INFO"        | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["tab_id"])')"
+fi
 
 # Sanitize a single value for embedding inside POSIX single-quoted strings.
 # Strategy: only reject NUL bytes and newlines (neither can be safely represented inside
@@ -30,10 +45,13 @@ shquote() {
   printf "'%s'" "${v//\'/\'\\\'\'}"
 }
 
-SAFE_MAIN_PANE="$(printf '%s' "$HERDR_PANE_ID" | tr -c 'A-Za-z0-9_.-' '-')"
+if [ "$REVIEW_MODE" = "subagent" ]; then
+  SAFE_MAIN_PANE="subagent"
+else
+  SAFE_MAIN_PANE="$(printf '%s' "${HERDR_PANE_ID:-auto}" | tr -c 'A-Za-z0-9_.-' '-')"
+fi
 RAND_SUFFIX="$(python3 -c 'import secrets; print(secrets.token_hex(2))')"
 SESSION_ID="agent_review_$(date +%Y%m%d-%H%M%S)-pane-${SAFE_MAIN_PANE}-${RAND_SUFFIX}"
-REVIEW_MODE="${REVIEW_MODE:-codex}"
 
 CWD="$(pwd)"
 
@@ -47,7 +65,7 @@ mkdir -p "$SESSION_ROOT"
   printf 'SESSION_ID=%s\n'     "$SESSION_ID"
   printf 'SESSION_ROOT=%s\n'   "$SESSION_ROOT"
   printf 'SESSIONS_ROOT=%s\n'  "$SESSIONS_ROOT"
-  printf 'MAIN_PANE=%s\n'      "$HERDR_PANE_ID"
+  printf 'MAIN_PANE=%s\n'      "${HERDR_PANE_ID:-subagent-virtual}"
   printf 'MAIN_TERMINAL=%s\n'  "$MAIN_TERMINAL"
   printf 'WORKSPACE_ID=%s\n'   "$WORKSPACE_ID"
   printf 'TAB_ID=%s\n'         "$TAB_ID"
@@ -61,7 +79,7 @@ mkdir -p "$SESSION_ROOT"
   printf 'SESSION_ID=%s\n'     "$(shquote "$SESSION_ID")"
   printf 'SESSION_ROOT=%s\n'   "$(shquote "$SESSION_ROOT")"
   printf 'SESSIONS_ROOT=%s\n'  "$(shquote "$SESSIONS_ROOT")"
-  printf 'MAIN_PANE=%s\n'      "$(shquote "$HERDR_PANE_ID")"
+  printf 'MAIN_PANE=%s\n'      "$(shquote "${HERDR_PANE_ID:-subagent-virtual}")"
   printf 'MAIN_TERMINAL=%s\n'  "$(shquote "$MAIN_TERMINAL")"
   printf 'WORKSPACE_ID=%s\n'   "$(shquote "$WORKSPACE_ID")"
   printf 'TAB_ID=%s\n'         "$(shquote "$TAB_ID")"
@@ -70,7 +88,11 @@ mkdir -p "$SESSION_ROOT"
   printf 'REVIEW_MODE=%s\n'   "$(shquote "$REVIEW_MODE")"
 } > "$SESSION_ROOT/session.env"
 
-herdr pane list --workspace "$WORKSPACE_ID" > "$SESSION_ROOT/workspace-panes.before.json"
+if [ "$REVIEW_MODE" = "subagent" ]; then
+  printf '[]\n' > "$SESSION_ROOT/workspace-panes.before.json"
+else
+  herdr pane list --workspace "$WORKSPACE_ID" > "$SESSION_ROOT/workspace-panes.before.json"
+fi
 
 # stdout = single line, raw path, no prefix.
 printf '%s\n' "$SESSION_ROOT"
