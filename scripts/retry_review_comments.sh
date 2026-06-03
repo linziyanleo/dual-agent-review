@@ -46,6 +46,7 @@ PROMPT="$("$SCRIPT_DIR/render_template.py" "$TEMPLATE" \
 # Step 4
 herdr pane send-text "$CODEX_PANE" "$PROMPT"
 herdr pane send-keys "$CODEX_PANE" Enter
+"$SCRIPT_DIR/dismiss_codex_plan_prompt.sh" "$SESSION_ROOT" >/dev/null
 "$SCRIPT_DIR/wait_codex_done.sh" "$SESSION_ROOT" "$OUTPUT_PATH" >/dev/null
 
 # Step 5

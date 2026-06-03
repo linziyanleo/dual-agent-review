@@ -86,6 +86,9 @@ if [ "$REVIEW_MODE" != "subagent" ]; then
   TERMINAL_DRIVER="${TERMINAL_DRIVER:-$("$SCRIPT_DIR/detect_driver.sh")}"
   . "$SCRIPT_DIR/drivers/${TERMINAL_DRIVER}.sh"
   driver_send "$CODEX_PANE" "$PROMPT"
+  if [ "$TERMINAL_DRIVER" = "herdr" ]; then
+    "$SCRIPT_DIR/dismiss_codex_plan_prompt.sh" "$SESSION_ROOT" >/dev/null
+  fi
 else
   # Subagent mode: write prompt to a file for the caller to use
   printf '%s' "$PROMPT" > "$SESSION_ROOT/v${ROUND}.${ROLE}.prompt"

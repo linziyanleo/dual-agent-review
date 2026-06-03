@@ -62,6 +62,7 @@ SKILL.md 已经被瘦到 ≤ 200 行，每个 Step 都是一两行调用 `"$SKIL
 | `cleanup_stale_panes.sh` | 关 owned 旧 Codex pane：done/idle 正常关；working/blocked mtime ≥ TTL 强关。扫 `.specanchor/tasks/agent_review_*/` | Step 0.5 |
 | `spawn_codex.sh` | split `$MAIN_PANE`、显式 `--cwd "$CWD"`、跑 `codex`、等 `›` 提示符 | Step 2 |
 | `assert_pane_owned.sh` | 比对 `.codex-terminal-id` 和 `herdr pane get` 返回的 terminal_id | 每次 send/wait/close Codex 前 |
+| `dismiss_codex_plan_prompt.sh` | 仅当 Codex pane 可见区出现 `Create a plan? ... esc dismiss` 时发送 `esc Enter` 并写 session.log | `send_review.sh` / `retry_review_comments.sh` 发送后 |
 | `send_review.sh` | 首轮渲染 `codex-review-v1.md`，N≥2 渲染 `codex-review-vn.md` + 引用 vN-1.dispositions + vN.diff | Step 3 / Step 8 |
 | `render_template.py` | `str.replace` + `_FILE` suffix file-injection（200-line budget）+ unresolved `{{SPEC_CONTEXT}}` assertion | `send_review.sh` / `retry_review_comments.sh` 内部 |
 | `validate_review_comments.py` | schema 校验（含 `finding_id` 唯一 + cross-field：`approve` 要求 `review_comments: []`）；exit 1 + stdout 单行错误 | Step 4 / Step 9 |
@@ -70,7 +71,7 @@ SKILL.md 已经被瘦到 ≤ 200 行，每个 Step 都是一两行调用 `"$SKIL
 | `append_rejected_section.py` | 扫所有 `vN.dispositions.yaml` + `vN.review-comments.yaml`，按版本聚合 rejected/deferred 到对应 section；幂等 | Step 8 |
 | `check_convergence.py` | 4 enum stdout（CONVERGED_APPROVE / CONVERGED_NO_BLOCKERS / CONTINUE / MAX_ROUNDS_REACHED），exit 0；`block` 永远算 blocker；workflow gate：`v(N).review-comments.yaml` 有 comments 但 dispositions 缺失 → CONTINUE | Step 7 |
 | `close_codex_pane.sh` | 仅在 status ∈ {done, idle, unknown} 关 pane；`--force` 旗忽略 status 强关 | Step 11 / Step 10 用户手动 |
-| `sanity_tests.sh` | framework-free 测试 45 个，不需要 herdr 实例 | 见下 |
+| `sanity_tests.sh` | framework-free 测试，不需要 herdr 实例 | 见下 |
 
 ## Running sanity tests
 

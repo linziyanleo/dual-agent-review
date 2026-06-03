@@ -939,6 +939,56 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
+step "dismiss_codex_plan_prompt.sh — dismisses only visible Plan-mode prompt"
+DISMISS_ROOT="$WORKDIR/dismiss_session"
+mkdir -p "$DISMISS_ROOT"
+printf 'pane_plan\n' > "$DISMISS_ROOT/.codex-pane-id"
+DISMISS_SHIM="$WORKDIR/dismiss_shim"
+mkdir -p "$DISMISS_SHIM"
+DISMISS_KEYS="$WORKDIR/dismiss_keys.log"
+: > "$DISMISS_KEYS"
+cat > "$DISMISS_SHIM/herdr" <<SHIM
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "pane read")
+    if [ "\${SHIM_PLAN_PROMPT:-0}" = "1" ]; then
+      printf 'Create a plan?  shift + tab use Plan mode   esc dismiss\n'
+    else
+      printf 'normal codex output\n'
+    fi
+    ;;
+  "pane send-keys")
+    shift 3
+    printf '%s\n' "\$@" >> "$DISMISS_KEYS"
+    ;;
+  *)
+    : ;;
+esac
+SHIM
+chmod +x "$DISMISS_SHIM/herdr"
+
+SHIM_PLAN_PROMPT=1 PATH="$DISMISS_SHIM:$PATH" \
+  "$SCRIPT_DIR/dismiss_codex_plan_prompt.sh" "$DISMISS_ROOT" >/dev/null
+printf 'esc\nEnter\n' > "$WORKDIR/expected_dismiss_keys.log"
+cmp "$DISMISS_KEYS" "$WORKDIR/expected_dismiss_keys.log" \
+  || die "Plan prompt should send exactly esc + Enter, got: $(cat "$DISMISS_KEYS")"
+grep -q 'DISMISSED_CODEX_PLAN_PROMPT' "$DISMISS_ROOT/session.log" \
+  || die "dismiss should be logged to session.log"
+pass "visible Plan-mode prompt -> esc + Enter + session.log"
+
+: > "$DISMISS_KEYS"
+SHIM_PLAN_PROMPT=0 PATH="$DISMISS_SHIM:$PATH" \
+  "$SCRIPT_DIR/dismiss_codex_plan_prompt.sh" "$DISMISS_ROOT" >/dev/null
+[ ! -s "$DISMISS_KEYS" ] || die "non-Plan output must not send keys"
+pass "non-Plan output -> no keys sent"
+
+grep -q 'dismiss_codex_plan_prompt.sh' "$SCRIPT_DIR/send_review.sh" \
+  || die "send_review.sh should invoke dismiss_codex_plan_prompt.sh after sending"
+grep -q 'dismiss_codex_plan_prompt.sh' "$SCRIPT_DIR/retry_review_comments.sh" \
+  || die "retry_review_comments.sh should invoke dismiss_codex_plan_prompt.sh after retry send"
+pass "send/retry paths are wired to Plan prompt dismiss helper"
+
+# ─────────────────────────────────────────────────────────────────────────────
 step "subagent-review-v1.md — renders with SPEC_CONTEXT_FILE + PLAN_PATH + OUTPUT_PATH"
 SUB_V1_TPL="$SKILL_DIR/prompts/subagent-review-v1.md"
 [ -f "$SUB_V1_TPL" ] || die "subagent-review-v1.md not found at $SUB_V1_TPL"

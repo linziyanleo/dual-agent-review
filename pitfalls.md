@@ -39,7 +39,7 @@
 
 - [ ] **Codex Plan mode 卡 `working` 不切 `blocked`**（issue #249）—— 已修但旧版仍存在。
       症状：`wait agent-status done` 永不返回，但 pane 里 Codex 实际在等用户按 Enter 确认 plan。
-      规避：prompt 模板里**明确禁止 Codex 进入 plan mode**，让它直接写文件后退出。我们当前模板里 "Then stop. Do not start any other work." 就是为这个写的，保留。
+      规避：prompt 模板里**明确禁止 Codex 进入 plan mode**，让它直接写文件后退出；发送后 `dismiss_codex_plan_prompt.sh` 还会只在可见区出现 `Create a plan? ... esc dismiss` 时发送 `esc Enter`。不要改成无条件多发 Enter。
 - [ ] **Codex 报 `done` 却没写产物文件**（§运行时 L35 同源现象）—— `wait agent-status done` 命中 ≠ `vN.review-comments.yaml` 已落盘。`wait_codex_done.sh` 已改为**以文件为唯一成功信号**：命中 done 后 grace（`GRACE_SECS`）内无文件即 abort 交给 retry，**不要回退到 status-only 判定**（详见 finding F-20260530-001）。
 - [ ] **`pane read --source recent` 可能因为软换行截断 YAML** —— SKILL.md 已改成"Codex 把 review comments 写文件，Claude 读文件"，不依赖屏幕抓取。**不要回退到 pane read 解析方案。**
 - [ ] **多 codepoint emoji / 国旗 emoji 在 pane 渲染为空白**（issue #243）—— 不影响功能，但 Claude 看 `pane read` 输出时可能困惑。

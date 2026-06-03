@@ -96,7 +96,7 @@ set -a; . "$SESSION_ROOT/session.env"; set +a  # reload to pick up CODEX_PANE / 
 "$SKILL_DIR/scripts/send_review.sh" "$SESSION_ROOT" 1
 ```
 
-内部先 `assert_pane_owned.sh` → 用 `render_template.py prompts/codex-review-v1.md` 渲染（替代 sed，无 shell metachar 问题）→ send-text + send-keys Enter。
+内部先 `assert_pane_owned.sh` → 用 `render_template.py prompts/codex-review-v1.md` 渲染（替代 sed，无 shell metachar 问题）→ send-text + send-keys Enter。herdr 模式下随后运行 `dismiss_codex_plan_prompt.sh`：只有可见区出现 Codex TUI 的 "Create a plan? ... esc dismiss" 提示时才发送 `esc Enter`，避免 Plan-mode 提示卡住提交。
 
 **subagent 模式**（替代上面的 send_review）：先用 render_template 渲染自包含 prompt，再用 `Agent` tool 同步调用 general-purpose subagent：
 
