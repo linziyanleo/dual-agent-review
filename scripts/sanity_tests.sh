@@ -939,7 +939,7 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
-step "dismiss_codex_plan_prompt.sh — dismisses only visible Plan-mode prompt"
+step "dismiss_codex_plan_prompt.sh — ensures Codex enters working state"
 DISMISS_ROOT="$WORKDIR/dismiss_session"
 mkdir -p "$DISMISS_ROOT"
 printf 'pane_plan\n' > "$DISMISS_ROOT/.codex-pane-id"
@@ -947,19 +947,34 @@ DISMISS_SHIM="$WORKDIR/dismiss_shim"
 mkdir -p "$DISMISS_SHIM"
 DISMISS_KEYS="$WORKDIR/dismiss_keys.log"
 : > "$DISMISS_KEYS"
+# Shim simulates: first call idle+Plan prompt, second call working
 cat > "$DISMISS_SHIM/herdr" <<SHIM
 #!/usr/bin/env bash
+STATE_FILE="$WORKDIR/dismiss_shim_state"
 case "\$1 \$2" in
+  "wait agent-status")
+    # First call: timeout (not working). After state file exists: working.
+    [ -f "\$STATE_FILE" ] && exit 0 || exit 1
+    ;;
+  "pane get")
+    if [ -f "\$STATE_FILE" ]; then
+      printf '{"result":{"pane":{"agent_status":"working"}}}'
+    else
+      printf '{"result":{"pane":{"agent_status":"idle"}}}'
+    fi
+    ;;
   "pane read")
-    if [ "\${SHIM_PLAN_PROMPT:-0}" = "1" ]; then
+    if [ ! -f "\$STATE_FILE" ] && [ "\${SHIM_PLAN_PROMPT:-0}" = "1" ]; then
       printf 'Create a plan?  shift + tab use Plan mode   esc dismiss\n'
     else
       printf 'normal codex output\n'
     fi
     ;;
   "pane send-keys")
-    shift 3
+    shift 2
+    shift  # skip pane_id
     printf '%s\n' "\$@" >> "$DISMISS_KEYS"
+    touch "\$STATE_FILE"
     ;;
   *)
     : ;;
@@ -967,26 +982,46 @@ esac
 SHIM
 chmod +x "$DISMISS_SHIM/herdr"
 
+# Test 1: Plan prompt visible → Escape + Enter sent, transitions to working
+rm -f "$WORKDIR/dismiss_shim_state"
+: > "$DISMISS_KEYS"
+: > "$DISMISS_ROOT/session.log"
 SHIM_PLAN_PROMPT=1 PATH="$DISMISS_SHIM:$PATH" \
   "$SCRIPT_DIR/dismiss_codex_plan_prompt.sh" "$DISMISS_ROOT" >/dev/null
-printf 'esc\nEnter\n' > "$WORKDIR/expected_dismiss_keys.log"
-cmp "$DISMISS_KEYS" "$WORKDIR/expected_dismiss_keys.log" \
-  || die "Plan prompt should send exactly esc + Enter, got: $(cat "$DISMISS_KEYS")"
+grep -q 'Escape' "$DISMISS_KEYS" \
+  || die "Plan prompt should send Escape, got: $(cat "$DISMISS_KEYS")"
+grep -q 'Enter' "$DISMISS_KEYS" \
+  || die "Plan prompt should send Enter, got: $(cat "$DISMISS_KEYS")"
 grep -q 'DISMISSED_CODEX_PLAN_PROMPT' "$DISMISS_ROOT/session.log" \
   || die "dismiss should be logged to session.log"
-pass "visible Plan-mode prompt -> esc + Enter + session.log"
+pass "Plan prompt -> Escape + Enter + logged"
 
+# Test 2: No Plan prompt, idle → resends Enter, transitions to working
+rm -f "$WORKDIR/dismiss_shim_state"
+: > "$DISMISS_KEYS"
+: > "$DISMISS_ROOT/session.log"
+SHIM_PLAN_PROMPT=0 PATH="$DISMISS_SHIM:$PATH" \
+  "$SCRIPT_DIR/dismiss_codex_plan_prompt.sh" "$DISMISS_ROOT" >/dev/null
+grep -q 'Enter' "$DISMISS_KEYS" \
+  || die "idle without Plan prompt should resend Enter, got: $(cat "$DISMISS_KEYS")"
+grep -q 'RESENT_ENTER' "$DISMISS_ROOT/session.log" \
+  || die "resent Enter should be logged"
+pass "no Plan prompt + idle -> resend Enter + logged"
+
+# Test 3: Already working → exits immediately, no keys sent
+rm -f "$WORKDIR/dismiss_shim_state"
+touch "$WORKDIR/dismiss_shim_state"  # pre-set to working
 : > "$DISMISS_KEYS"
 SHIM_PLAN_PROMPT=0 PATH="$DISMISS_SHIM:$PATH" \
   "$SCRIPT_DIR/dismiss_codex_plan_prompt.sh" "$DISMISS_ROOT" >/dev/null
-[ ! -s "$DISMISS_KEYS" ] || die "non-Plan output must not send keys"
-pass "non-Plan output -> no keys sent"
+[ ! -s "$DISMISS_KEYS" ] || die "already-working Codex must not receive extra keys"
+pass "already working -> no keys sent"
 
 grep -q 'dismiss_codex_plan_prompt.sh' "$SCRIPT_DIR/send_review.sh" \
   || die "send_review.sh should invoke dismiss_codex_plan_prompt.sh after sending"
 grep -q 'dismiss_codex_plan_prompt.sh' "$SCRIPT_DIR/retry_review_comments.sh" \
   || die "retry_review_comments.sh should invoke dismiss_codex_plan_prompt.sh after retry send"
-pass "send/retry paths are wired to Plan prompt dismiss helper"
+pass "send/retry paths are wired to dismiss helper"
 
 # ─────────────────────────────────────────────────────────────────────────────
 step "subagent-review-v1.md — renders with SPEC_CONTEXT_FILE + PLAN_PATH + OUTPUT_PATH"
