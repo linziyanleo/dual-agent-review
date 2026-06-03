@@ -46,7 +46,7 @@ for attempt in $(seq 1 "$MAX_RETRIES"); do
 
   case "$VISIBLE" in
     *"Create a plan?"*"esc dismiss"*)
-      herdr pane send-keys "$CODEX_PANE" Escape
+      herdr pane send-keys "$CODEX_PANE" esc
       printf '[%s] DISMISSED_CODEX_PLAN_PROMPT attempt=%s pane=%s\n' "$(date)" "$attempt" "$CODEX_PANE" >> "$SESSION_ROOT/session.log"
       sleep 1
       herdr pane send-keys "$CODEX_PANE" Enter

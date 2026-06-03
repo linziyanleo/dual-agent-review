@@ -982,19 +982,21 @@ esac
 SHIM
 chmod +x "$DISMISS_SHIM/herdr"
 
-# Test 1: Plan prompt visible → Escape + Enter sent, transitions to working
+# Test 1: Plan prompt visible -> esc + Enter sent, transitions to working
 rm -f "$WORKDIR/dismiss_shim_state"
 : > "$DISMISS_KEYS"
 : > "$DISMISS_ROOT/session.log"
 SHIM_PLAN_PROMPT=1 PATH="$DISMISS_SHIM:$PATH" \
   "$SCRIPT_DIR/dismiss_codex_plan_prompt.sh" "$DISMISS_ROOT" >/dev/null
-grep -q 'Escape' "$DISMISS_KEYS" \
-  || die "Plan prompt should send Escape, got: $(cat "$DISMISS_KEYS")"
+grep -q '^esc$' "$DISMISS_KEYS" \
+  || die "Plan prompt should send esc, got: $(cat "$DISMISS_KEYS")"
+! grep -q '^Escape$' "$DISMISS_KEYS" \
+  || die "Plan prompt must not send unsupported Escape key"
 grep -q 'Enter' "$DISMISS_KEYS" \
   || die "Plan prompt should send Enter, got: $(cat "$DISMISS_KEYS")"
 grep -q 'DISMISSED_CODEX_PLAN_PROMPT' "$DISMISS_ROOT/session.log" \
   || die "dismiss should be logged to session.log"
-pass "Plan prompt -> Escape + Enter + logged"
+pass "Plan prompt -> esc + Enter + logged"
 
 # Test 2: No Plan prompt, idle → resends Enter, transitions to working
 rm -f "$WORKDIR/dismiss_shim_state"

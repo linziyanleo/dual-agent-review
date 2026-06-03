@@ -5,8 +5,7 @@ Claude Code × Codex CLI 收敛式方案评审 skill，跑在 [herdr](https://he
 ## 安装
 
 ```bash
-ln -sfn ~/Documents/Test/dual-agent-review ~/.skills-manager/skills/dual-agent-review
-ln -sfn ~/.skills-manager/skills/dual-agent-review ~/.claude/skills/dual-agent-review
+ln -sfn /path/to/dual-agent-review ~/.claude/skills/dual-agent-review
 ```
 
 依赖：
