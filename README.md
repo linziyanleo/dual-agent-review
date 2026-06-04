@@ -9,7 +9,7 @@ ln -sfn /path/to/dual-agent-review ~/.claude/skills/dual-agent-review
 ```
 
 依赖：
-- herdr ≥ 0.6.2，且在 herdr 内运行 Claude Code（`HERDR_ENV=1`）
+- herdr ≥ 0.6.7，且在 herdr 内运行 Claude Code（`HERDR_ENV=1`）
 - `codex` CLI ≥ 0.133.0
 - 已装两个集成：`herdr integration install claude && herdr integration install codex`
 - `~/.claude/skills/herdr/` 已装（Skill 内会调用 herdr 命令）
@@ -95,3 +95,18 @@ SKILL.md 已经被瘦到 ≤ 200 行，每个 Step 都是一两行调用 `"$SKIL
 ## 设计原则
 
 详见 [SKILL.md](SKILL.md) 末尾"设计原则"小节，6 条不可妥协。
+
+## herdr 兼容性
+
+DAR 跟进到 herdr v0.6.8。依赖的关键 herdr API：
+
+| API / 功能 | 最低版本 | DAR 使用场景 |
+|---|---|---|
+| `pane split/get/list/read/close` | v0.6.0 | 核心 pane 管理 |
+| `wait output/agent-status` | v0.6.0 | Codex 等待 |
+| `integration status` | v0.6.0 | preflight 检查 |
+| `pane report-metadata` | v0.6.3 | sidebar 进度显示（planned） |
+| `foreground_cwd` 字段 | v0.6.5 | cwd 校验（planned） |
+| `agent_session` 元数据 | v0.6.5 | UUID session 关联（planned） |
+| `agent get <terminal_id>` | v0.6.5 | 稳定 terminal_id 寻址（planned） |
+| agent 状态检测修复 | v0.6.7 | wait 参数优化依赖 |

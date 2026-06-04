@@ -59,6 +59,23 @@ esac
 # herdr integration status check — soft warn (codex mode only; subagent mode
 # does not use herdr agent_status detection).
 if [ "$REVIEW_MODE" = "codex" ]; then
+  # herdr version check (>= 0.6.7 required for reliable agent status detection)
+  HERDR_VERSION="$(herdr --version 2>/dev/null | awk '{print $2}')"
+  if [ -n "$HERDR_VERSION" ]; then
+    python3 -c "
+import sys
+v = '$HERDR_VERSION'.split('-')[0].split('.')
+try:
+    major, minor, patch = int(v[0]), int(v[1]), int(v[2])
+except (IndexError, ValueError):
+    sys.exit(0)  # unparseable version — skip check
+if (major, minor, patch) < (0, 6, 7):
+    ver = '.'.join(map(str, [major, minor, patch]))
+    print('ABORT: herdr ' + ver + ' < 0.6.7; DAR v2.0 requires herdr >= 0.6.7 for reliable agent status detection. Run: herdr update', file=sys.stderr)
+    sys.exit(1)
+" || exit 1
+  fi
+
   INTEG_STATUS="$(herdr integration status 2>&1 || true)"
   printf '%s\n' "$INTEG_STATUS" | grep -q 'codex: current'  || warn "codex integration may be missing/stale; agent_status detection will degrade"
   printf '%s\n' "$INTEG_STATUS" | grep -q 'claude: current' || warn "claude integration may be missing/stale"
