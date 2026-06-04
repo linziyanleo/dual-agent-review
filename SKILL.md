@@ -47,6 +47,7 @@ set -euo pipefail
 ```bash
 SESSION_ROOT="$("$SKILL_DIR/scripts/init_session.sh")"
 set -a; . "$SESSION_ROOT/session.env"; set +a
+"$SKILL_DIR/scripts/report_progress.sh" "DAR: session init"
 ```
 
 `init_session.sh` 干的事：
@@ -94,6 +95,7 @@ set -a; . "$SESSION_ROOT/session.env"; set +a  # reload to pick up CODEX_PANE / 
 
 ```bash
 "$SKILL_DIR/scripts/send_review.sh" "$SESSION_ROOT" 1
+"$SKILL_DIR/scripts/report_progress.sh" "DAR: Round 1 sent" "等待 Codex review"
 ```
 
 内部先 `assert_pane_owned.sh` → 用 `render_template.py prompts/codex-review-v1.md` 渲染（替代 sed，无 shell metachar 问题）→ send-text + send-keys Enter。herdr 模式下随后运行 `dismiss_codex_plan_prompt.sh`：只有可见区出现 Codex TUI 的 "Create a plan? ... esc dismiss" 提示时才发送 `esc Enter`，避免 Plan-mode 提示卡住提交。
@@ -215,8 +217,10 @@ PROMPT="$("$SKILL_DIR/scripts/render_template.py" "$SKILL_DIR/prompts/subagent-r
 "$SKILL_DIR/scripts/append_rejected_section.py" "$SESSION_ROOT" "$SESSION_ROOT/v${N}.md"
 ln -sfn "v${N}.md" "$SESSION_ROOT/final.md"
 echo "[$(date)] CONVERGED at v${N}" >> "$SESSION_ROOT/session.log"
+"$SKILL_DIR/scripts/report_progress.sh" "DAR: Converged v${N}" "收敛"
 "$SKILL_DIR/scripts/close_codex_pane.sh" "$SESSION_ROOT"
 SESSION_ROOT="$("$SKILL_DIR/scripts/archive_session.sh" "$SESSION_ROOT")"
+"$SKILL_DIR/scripts/report_progress.sh" --clear
 ```
 
 `close_codex_pane.sh` 只在 status ∈ {done, idle, unknown} 时关 pane；working/blocked 留着供 inspection。需强关 pass `--force`：`"$SKILL_DIR/scripts/close_codex_pane.sh" "$SESSION_ROOT" --force`（写 `FORCE_CLOSED` 到 session.log）。
