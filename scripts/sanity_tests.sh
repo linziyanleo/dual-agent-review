@@ -1073,5 +1073,95 @@ case "$SUB_VN_OUT" in *'Severity guidance'*) ;; *) die "subagent-review-vn must 
 pass "subagent-review-vn renders self-contained with schema + spec context + adversarial framing"
 
 # ─────────────────────────────────────────────────────────────────────────────
+step "report_progress.sh — no-op when HERDR_ENV unset"
+RP_OUT="$(HERDR_ENV= HERDR_PANE_ID= "$SCRIPT_DIR/report_progress.sh" "DAR: test" 2>&1)" || true
+[ -z "$RP_OUT" ] || die "report_progress should be silent when HERDR_ENV unset, got: $RP_OUT"
+pass "HERDR_ENV unset -> silent no-op"
+
+RP_OUT2="$(HERDR_ENV= "$SCRIPT_DIR/report_progress.sh" --clear 2>&1)" || true
+[ -z "$RP_OUT2" ] || die "report_progress --clear should be silent when HERDR_ENV unset"
+pass "--clear without HERDR_ENV -> silent no-op"
+
+RP_OUT3="$(HERDR_ENV=1 HERDR_PANE_ID= "$SCRIPT_DIR/report_progress.sh" "DAR: test" 2>&1)" || true
+[ -z "$RP_OUT3" ] || die "report_progress should be silent when HERDR_PANE_ID empty"
+pass "HERDR_PANE_ID empty -> silent no-op"
+
+RP_OUT4="$(HERDR_ENV=1 HERDR_PANE_ID="p_1" "$SCRIPT_DIR/report_progress.sh" "" 2>&1)" || true
+[ -z "$RP_OUT4" ] || die "report_progress with empty title should be silent"
+pass "empty title -> silent no-op"
+
+# ─────────────────────────────────────────────────────────────────────────────
+step "preflight.sh — herdr version gate (codex mode only)"
+VG_ISO="$WORKDIR/vg_iso"
+mkdir -p "$VG_ISO"
+
+# Stub herdr that returns a configurable version
+cat > "$VG_ISO/herdr" <<'SHIM'
+#!/bin/sh
+case "$1" in
+  --version) echo "herdr ${FAKE_HERDR_VERSION:-0.6.7}" ;;
+  integration) echo "claude: current (v5)"; echo "codex: current (v5)" ;;
+  agent) echo '{"result":{"agents":[]}}' ;;
+  pane)
+    case "$2" in
+      get) echo '{"result":{"pane":{"pane_id":"p_1","terminal_id":"t_1","tab_id":"1:1","workspace_id":"w_1","cwd":"/tmp","foreground_cwd":"/tmp","agent_status":"idle"}}}' ;;
+      list) echo '{"result":{"panes":[]}}' ;;
+    esac ;;
+esac
+SHIM
+chmod +x "$VG_ISO/herdr"
+
+# Stub codex
+cat > "$VG_ISO/codex" <<'S'
+#!/bin/sh
+echo codex
+S
+chmod +x "$VG_ISO/codex"
+
+# Need python3 and spec-anchor setup
+VG_SA="$VG_ISO/sa"
+mkdir -p "$VG_SA/scripts"
+printf '# stub\n' > "$VG_SA/SKILL.md"
+printf '#!/bin/sh\necho ok\n' > "$VG_SA/scripts/specanchor-boot.sh"
+chmod +x "$VG_SA/scripts/specanchor-boot.sh"
+
+VG_CWD="$VG_ISO/proj"
+mkdir -p "$VG_CWD/.specanchor/tasks"
+printf 'paths:\n  task_specs: .specanchor/tasks\n' > "$VG_CWD/anchor.yaml"
+
+# Build a minimal isolated PATH: fake herdr + codex, real python3 + bash + env + core utils
+VG_PATH="$VG_ISO:$(command -v python3 | xargs dirname):$(command -v bash | xargs dirname):/usr/bin"
+
+# Test: herdr 0.6.6 → fail
+VG_ERR="$(cd "$VG_CWD" && HERDR_ENV=1 HERDR_PANE_ID=p_1 REVIEW_MODE=codex \
+  SA_SKILL_DIR="$VG_SA" SKILL_DIR="$SKILL_DIR" FAKE_HERDR_VERSION=0.6.6 \
+  PATH="$VG_PATH" \
+  "$SCRIPT_DIR/preflight.sh" 2>&1)" && die "preflight should fail for herdr 0.6.6" || true
+case "$VG_ERR" in *'0.6.7'*) ;; *) die "preflight error should mention 0.6.7, got: $VG_ERR" ;; esac
+pass "herdr 0.6.6 -> preflight fail with version hint"
+
+# Test: herdr 0.6.7 → pass
+VG_OK="$(cd "$VG_CWD" && HERDR_ENV=1 HERDR_PANE_ID=p_1 REVIEW_MODE=codex \
+  SA_SKILL_DIR="$VG_SA" SKILL_DIR="$SKILL_DIR" FAKE_HERDR_VERSION=0.6.7 \
+  PATH="$VG_PATH" \
+  "$SCRIPT_DIR/preflight.sh" 2>&1)" || die "preflight should pass for herdr 0.6.7, got: $VG_OK"
+pass "herdr 0.6.7 -> preflight pass"
+
+# Test: herdr 0.6.8 → pass
+VG_OK2="$(cd "$VG_CWD" && HERDR_ENV=1 HERDR_PANE_ID=p_1 REVIEW_MODE=codex \
+  SA_SKILL_DIR="$VG_SA" SKILL_DIR="$SKILL_DIR" FAKE_HERDR_VERSION=0.6.8 \
+  PATH="$VG_PATH" \
+  "$SCRIPT_DIR/preflight.sh" 2>&1)" || die "preflight should pass for herdr 0.6.8, got: $VG_OK2"
+pass "herdr 0.6.8 -> preflight pass"
+
+# ─────────────────────────────────────────────────────────────────────────────
+step "preflight.sh — subagent mode skips herdr version check"
+VG_NOSUB="$(cd "$VG_CWD" && HERDR_ENV= HERDR_PANE_ID= REVIEW_MODE=subagent \
+  SA_SKILL_DIR="$VG_SA" SKILL_DIR="$SKILL_DIR" \
+  PATH="$VG_PATH" \
+  "$SCRIPT_DIR/preflight.sh" 2>&1)" || die "preflight subagent should pass without herdr, got: $VG_NOSUB"
+pass "subagent mode without herdr -> preflight pass (no version check)"
+
+# ─────────────────────────────────────────────────────────────────────────────
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1
