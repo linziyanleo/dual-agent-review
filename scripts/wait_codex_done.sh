@@ -30,8 +30,8 @@ if [ "${3:-}" = "--total-timeout" ]; then
 fi
 
 CODEX_PANE="$(cat "$SESSION_ROOT/.codex-pane-id")"
-POLL_INTERVAL=300  # seconds per agent-status wait cycle
-GRACE_SECS=20      # after "done" fires, tolerate this much fs-flush / event lead time
+POLL_INTERVAL=120  # seconds per agent-status wait cycle (lowered from 300: v0.6.7 done detection is more reliable)
+GRACE_SECS=10      # after "done" fires, tolerate this much fs-flush / event lead time (lowered from 20: v0.6.7 fixes transcript viewer false idle)
                    # before the output file must appear (see done-handling below)
 
 # Current agent_status for the Codex pane ("working"/"done"/"idle"/...), or
@@ -85,4 +85,4 @@ if [ -f "$OUTPUT_PATH" ] && [ -s "$OUTPUT_PATH" ]; then
   exit 0
 fi
 
-fail "Codex stopped without producing output (pane=$CODEX_PANE, status=$(codex_agent_status), waited >=${TOTAL_TIMEOUT}s, expected=$OUTPUT_PATH)"
+fail "Codex stopped without producing output (pane=$CODEX_PANE, status=$(codex_agent_status), cwd=$(herdr pane get "$CODEX_PANE" 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("result",{}).get("pane",{}).get("foreground_cwd","?"))' 2>/dev/null || echo '?'), waited >=${TOTAL_TIMEOUT}s, expected=$OUTPUT_PATH)"
