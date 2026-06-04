@@ -46,9 +46,32 @@ scan_root() {
     OLD_TERMINAL="$(cat "$OLD_ROOT/.codex-terminal-id")"
 
     if ! OLD_INFO="$(herdr pane get "$OLD_PANE" 2>/dev/null)"; then
-      # Compact id may have shifted. Resolve via stable terminal_id.
-      OLD_PANE="$(herdr pane list --workspace "$WORKSPACE_ID" 2>/dev/null \
-        | python3 -c "
+      # Primary recovery: direct terminal_id lookup via herdr agent get (v0.6.5+)
+      if OLD_INFO="$(herdr agent get "$OLD_TERMINAL" 2>/dev/null)"; then
+        OLD_PANE="$(printf '%s' "$OLD_INFO" | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["agent"]["pane_id"])' 2>/dev/null)" || true
+        if [ -n "$OLD_PANE" ]; then
+          printf '%s\n' "$OLD_PANE" > "$OLD_ROOT/.codex-pane-id"
+        fi
+      fi
+
+      # Secondary recovery: UUID match via agent list (if .codex-session-uuid exists)
+      if [ -z "${OLD_PANE:-}" ] && [ -f "$OLD_ROOT/.codex-session-uuid" ]; then
+        OLD_UUID="$(cat "$OLD_ROOT/.codex-session-uuid")"
+        OLD_PANE="$(herdr agent list 2>/dev/null | python3 -c "
+import sys, json
+for a in json.load(sys.stdin)['result']['agents']:
+    if a.get('agent_session',{}).get('value','') == '$OLD_UUID':
+        print(a['pane_id']); break
+" 2>/dev/null)" || true
+        if [ -n "$OLD_PANE" ]; then
+          printf '%s\n' "$OLD_PANE" > "$OLD_ROOT/.codex-pane-id"
+        fi
+      fi
+
+      # Tertiary: pane list + terminal_id scan (legacy fallback)
+      if [ -z "${OLD_PANE:-}" ]; then
+        OLD_PANE="$(herdr pane list --workspace "$WORKSPACE_ID" 2>/dev/null \
+          | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 for p in data['result']['panes']:
@@ -56,7 +79,9 @@ for p in data['result']['panes']:
         print(p['pane_id'])
         break
 " 2>/dev/null)" || true
-      if [ -z "$OLD_PANE" ]; then
+      fi
+
+      if [ -z "${OLD_PANE:-}" ]; then
         rm -f "$OLD_ROOT/.codex-pane-id" "$OLD_ROOT/.codex-terminal-id"
         continue
       fi

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Verify the Codex pane registered in $SESSION_ROOT still points at the terminal
-# we originally split. Refuses to proceed if id was compacted onto another terminal.
+# Verify the Codex pane registered in $SESSION_ROOT still exists and matches
+# the terminal we originally split. Updates .codex-pane-id if the compact id
+# shifted due to pane compaction.
+#
+# Primary path uses herdr agent get with terminal_id for stable lookup (v0.6.5+).
+# Falls back to pane list scanning for older herdr versions.
 #
 # Usage: assert_pane_owned.sh <session_root>
-# stdout: nothing on success. Two lines exported via stdout would be brittle here,
-#         so the caller should re-read .codex-pane-id / .codex-terminal-id itself.
 set -euo pipefail
 
 fail() { printf 'ABORT: %s\n' "$*" >&2; exit 1; }
@@ -17,11 +19,17 @@ SESSION_ROOT="${1:-}"
 CODEX_PANE="$(cat "$SESSION_ROOT/.codex-pane-id")"
 CODEX_TERMINAL="$(cat "$SESSION_ROOT/.codex-terminal-id")"
 
-if ! INFO="$(herdr pane get "$CODEX_PANE" 2>/dev/null)"; then
-  # Compact pane id may have shifted after another pane in the same workspace
-  # was closed (herdr re-numbers panes). Resolve via the stable terminal_id.
-  WORKSPACE="$(cat "$SESSION_ROOT/session.meta" | awk -F= '$1=="WORKSPACE_ID"{print $2}')"
-  [ -n "$WORKSPACE" ] || fail "herdr pane get $CODEX_PANE failed and WORKSPACE_ID not in session.meta"
+# Primary: direct terminal_id lookup via herdr agent get (stable, no pane id needed)
+if INFO="$(herdr agent get "$CODEX_TERMINAL" 2>/dev/null)"; then
+  RESOLVED="$(printf '%s' "$INFO" | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["agent"]["pane_id"])')"
+  if [ "$RESOLVED" != "$CODEX_PANE" ]; then
+    printf '%s\n' "$RESOLVED" > "$SESSION_ROOT/.codex-pane-id"
+    CODEX_PANE="$RESOLVED"
+  fi
+else
+  # Fallback: pane list + terminal_id scan
+  WORKSPACE="$(awk -F= '$1=="WORKSPACE_ID"{print $2}' "$SESSION_ROOT/session.meta")"
+  [ -n "$WORKSPACE" ] || fail "herdr agent get $CODEX_TERMINAL failed and WORKSPACE_ID not in session.meta"
   RESOLVED="$(herdr pane list --workspace "$WORKSPACE" 2>/dev/null \
     | python3 -c "
 import sys, json
@@ -32,14 +40,25 @@ for p in data['result']['panes']:
         break
 ")"
   [ -n "$RESOLVED" ] \
-    || fail "herdr pane get $CODEX_PANE failed and terminal $CODEX_TERMINAL not found in workspace $WORKSPACE; Codex pane genuinely gone"
-  # Update the saved compact id so subsequent calls don't repeat this lookup.
+    || fail "Codex terminal $CODEX_TERMINAL not found in workspace $WORKSPACE; pane genuinely gone"
   printf '%s\n' "$RESOLVED" > "$SESSION_ROOT/.codex-pane-id"
   CODEX_PANE="$RESOLVED"
   INFO="$(herdr pane get "$CODEX_PANE" 2>/dev/null)" \
     || fail "herdr pane get $CODEX_PANE failed even after resolving from terminal_id"
 fi
 
-ACTUAL="$(printf '%s' "$INFO" | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"]["terminal_id"])')"
-[ "$ACTUAL" = "$CODEX_TERMINAL" ] \
-  || fail "Codex pane $CODEX_PANE now points at terminal $ACTUAL (expected $CODEX_TERMINAL); refusing to send input"
+# foreground_cwd drift warning (once per session to avoid noise)
+if [ ! -f "$SESSION_ROOT/.cwd-drift-warned" ]; then
+  ACTUAL_CWD="$(printf '%s' "$INFO" | python3 -c '
+import sys,json
+d = json.load(sys.stdin)
+r = d.get("result",{})
+pane = r.get("pane", r.get("agent", {}))
+print(pane.get("foreground_cwd", ""))
+' 2>/dev/null || true)"
+  EXPECTED_CWD="$(awk -F= '$1=="CWD"{print $2}' "$SESSION_ROOT/session.meta")"
+  if [ -n "$ACTUAL_CWD" ] && [ -n "$EXPECTED_CWD" ] && [ "$ACTUAL_CWD" != "$EXPECTED_CWD" ]; then
+    printf 'WARN: Codex pane foreground_cwd=%s differs from session CWD=%s\n' "$ACTUAL_CWD" "$EXPECTED_CWD" >&2
+    touch "$SESSION_ROOT/.cwd-drift-warned"
+  fi
+fi
