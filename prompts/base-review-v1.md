@@ -31,6 +31,7 @@ review_comments:
 
 ## Rules
 
+- **YAML quoting**: All string scalar values MUST be double-quoted (`"..."`). Any value containing `: ` (colon-space) causes a YAML parse error if unquoted. Example: `location: "re: F-3 from v1 / Step 2"` — NOT `location: re: F-3 from v1 / Step 2`.
 - Be specific. "Add error handling" is not actionable. "Step 3 doesn't handle ENOSPC on the cache write — wrap in try/except and surface as a user-visible error" is actionable.
 - Do NOT propose architectural rewrites unless the plan has a fundamental flaw. Scope your suggestions to within the plan's stated goals.
 - Do NOT modify the plan file. Only write to `{{OUTPUT_PATH}}`.

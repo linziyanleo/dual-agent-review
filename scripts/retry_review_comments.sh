@@ -29,12 +29,13 @@ case "$ROUND" in ''|*[!0-9]*) fail "round must be a positive integer, got: $ROUN
 
 OUTPUT_PATH="$SESSION_ROOT/v${ROUND}.review-comments.yaml"
 
-# Step 1
-rm -f "$OUTPUT_PATH"
-
-# Step 2
+# Step 1: Assert retry viability BEFORE touching the invalid file
 "$SCRIPT_DIR/assert_pane_owned.sh" "$SESSION_ROOT"
 CODEX_PANE="$(cat "$SESSION_ROOT/.codex-pane-id")"
+
+# Step 2: Preserve invalid output for diagnosis
+INVALID_PATH="${OUTPUT_PATH%.yaml}.invalid.yaml"
+[ -f "$OUTPUT_PATH" ] && mv "$OUTPUT_PATH" "$INVALID_PATH"
 
 # Step 3
 TEMPLATE="$SKILL_DIR/prompts/review-comments-retry.md"
@@ -43,10 +44,13 @@ PROMPT="$("$SCRIPT_DIR/render_template.py" "$TEMPLATE" \
   "OUTPUT_PATH=$OUTPUT_PATH" \
   "SCHEMA_ERROR=$SCHEMA_ERROR")"
 
-# Step 4
-herdr pane send-text "$CODEX_PANE" "$PROMPT"
-herdr pane send-keys "$CODEX_PANE" Enter
-"$SCRIPT_DIR/dismiss_codex_plan_prompt.sh" "$SESSION_ROOT" >/dev/null
+# Step 4: Send via terminal driver abstraction (same path as send_review.sh)
+TERMINAL_DRIVER="${TERMINAL_DRIVER:-$("$SCRIPT_DIR/detect_driver.sh")}"
+. "$SCRIPT_DIR/drivers/${TERMINAL_DRIVER}.sh"
+driver_send "$CODEX_PANE" "$PROMPT"
+if [ "$TERMINAL_DRIVER" = "herdr" ]; then
+  "$SCRIPT_DIR/dismiss_codex_plan_prompt.sh" "$SESSION_ROOT" >/dev/null
+fi
 "$SCRIPT_DIR/wait_codex_done.sh" "$SESSION_ROOT" "$OUTPUT_PATH" >/dev/null
 
 # Step 5

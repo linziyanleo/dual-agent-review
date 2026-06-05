@@ -63,3 +63,54 @@
 4. `tail -50 ~/.config/herdr/herdr-server.log` —— 看 herdr 服务端日志
 5. `find .specanchor/tasks/agent_review_* -maxdepth 1 -type f 2>/dev/null | sort` —— 看当前 session 写文件到哪一步
 6. 仍不明确：保留 `.specanchor/tasks/agent_review_*/`，记录 herdr 版本 + codex 版本 + 现象，去 https://github.com/ogulcancelik/herdr/issues 搜
+
+## §Codex 运行时失败 → subagent 恢复（需用户审批）
+
+**前提**：codex 模式下 `wait_codex_done.sh` 或 retry 均失败，且诊断显示 Codex pane 已不可恢复（`pane_unavailable`、`status_unknown` 且 pane read 无有效内容）。
+
+**禁止自动降级**——以下流程必须由用户显式发起（设计原则 §7）。
+
+### 恢复流程
+
+1. **报告当前状态**（Claude 输出给用户）：
+   ```
+   Codex pane 失败，当前状态：
+   - 失败轮次: vN (round N)
+   - 失败原因: <wait-failure reason from diagnostics>
+   - 诊断文件: $SESSION_ROOT/wait-failure-*.diag
+   - 已完成轮次: v1..v(N-1) 的 review-comments + dispositions 均已落盘
+   - 待产出: v{N}.review-comments.yaml
+
+   选项：
+   A) 重试 codex（需确认 pane 仍可用）
+   B) 切换到 subagent 模式继续本轮 review
+   C) 终止本次 DAR session
+   ```
+
+2. **用户选 B → 设置 `REVIEW_MODE=subagent` 并恢复**：
+   ```bash
+   export REVIEW_MODE=subagent
+   # 渲染 subagent prompt（复用当前轮的 plan + spec-context + prev dispositions）
+   PROMPT="$("$SKILL_DIR/scripts/render_template.py" "$SKILL_DIR/prompts/subagent-review-vn.md" \
+     "PLAN_PATH=$SESSION_ROOT/v${N}.md" \
+     "PREV_DISPOSITION=$SESSION_ROOT/v$((N-1)).dispositions.yaml" \
+     "DIFF_PATH=$SESSION_ROOT/v${N}.diff" \
+     "OUTPUT_PATH=$SESSION_ROOT/v${N}.review-comments.yaml" \
+     "SPEC_CONTEXT_FILE=$SESSION_ROOT/spec-context.md")"
+   # 用 Agent tool 调用 general-purpose subagent
+   ```
+
+3. **不重写先前 artifacts** — v1..v(N-1) 的 review-comments、dispositions、plan versions 全部保留。subagent 从当前轮开始，读同一份 plan + diff + prev dispositions。
+
+4. **后续轮次保持 subagent 模式** — 一旦切换，本 session 后续轮次全部用 subagent（不再切回 codex）。
+
+5. **关闭失败的 Codex pane**（如果仍存在）：
+   ```bash
+   "$SKILL_DIR/scripts/close_codex_pane.sh" "$SESSION_ROOT" --force
+   ```
+
+### 关键约束
+
+- 用户未选 B 之前，**不得**启动 subagent
+- 如果 N=1（首轮就失败），subagent prompt 用 `subagent-review-v1.md` 而非 vn 模板
+- session.log 记录 `[timestamp] MODE_SWITCH: codex → subagent (user-approved, round=N)`

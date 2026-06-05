@@ -201,6 +201,25 @@ case "$OUT" in *"requires review_comments: []"*) pass "approve+low -> fail (no n
                                         *) die "approve+low message should say 'requires review_comments: []': $OUT" ;;
 esac
 
+# (h) unquoted colon-space triggers YAML parse error with actionable hint
+cat > "$fixture_dir/colon_space.yaml" <<'YAML'
+overall_verdict: request_changes
+summary: test
+review_comments:
+  - finding_id: F-1
+    severity: high
+    category: correctness
+    location: re: F-1 from v1
+    description: d
+    suggested_change: c
+    rationale: r
+YAML
+OUT="$("$SCRIPT_DIR/validate_review_comments.py" "$fixture_dir/colon_space.yaml" 2>&1)" && die "colon-space should cause YAML parse error" || true
+case "$OUT" in *"mapping values are not allowed here"*) ;; *) die "expected PyYAML 'mapping values' error, got: $OUT" ;; esac
+case "$OUT" in *"colon-space"*|*"double quotes"*) pass "colon-space YAML error includes actionable hint" ;;
+                                                *) die "colon-space error message should include quoting hint: $OUT" ;;
+esac
+
 # ─────────────────────────────────────────────────────────────────────────────
 step "validate_dispositions.py — 9 broken fixtures + happy path"
 dd="$WORKDIR/dispo"
@@ -1024,6 +1043,27 @@ grep -q 'dismiss_codex_plan_prompt.sh' "$SCRIPT_DIR/send_review.sh" \
 grep -q 'dismiss_codex_plan_prompt.sh' "$SCRIPT_DIR/retry_review_comments.sh" \
   || die "retry_review_comments.sh should invoke dismiss_codex_plan_prompt.sh after retry send"
 pass "send/retry paths are wired to dismiss helper"
+
+# Test 4: All retries exhausted, codex never enters working -> exit non-zero
+DISMISS_STUCK="$WORKDIR/dismiss_stuck_shim"
+mkdir -p "$DISMISS_STUCK"
+cat > "$DISMISS_STUCK/herdr" <<SHIM
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "wait agent-status") exit 1 ;;
+  "pane get")          printf '{"result":{"pane":{"agent_status":"idle"}}}' ;;
+  "pane read")         printf 'normal output\n' ;;
+  "pane send-keys")    : ;;
+  *) : ;;
+esac
+SHIM
+chmod +x "$DISMISS_STUCK/herdr"
+rm -f "$WORKDIR/dismiss_shim_state"
+: > "$DISMISS_ROOT/session.log"
+if PATH="$DISMISS_STUCK:$PATH" "$SCRIPT_DIR/dismiss_codex_plan_prompt.sh" "$DISMISS_ROOT" >/dev/null 2>&1; then
+  die "dismiss should exit non-zero when all retries exhausted"
+fi
+pass "all retries exhausted -> exit 1"
 
 # ─────────────────────────────────────────────────────────────────────────────
 step "subagent-review-v1.md — renders with SPEC_CONTEXT_FILE + PLAN_PATH + OUTPUT_PATH"

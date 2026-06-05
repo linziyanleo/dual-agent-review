@@ -124,7 +124,7 @@ fi
 rm -f /tmp/dar.err.$$
 ```
 
-`validate_review_comments.py` 校验 schema（含 `finding_id` 唯一）。retry 失败抛回用户，**不要**再 retry。**为什么不 pane read 抓输出？** Codex 输出会被 TUI 排版、滚动、wrap 影响；文件落盘是唯一可靠的契约。
+`validate_review_comments.py` 校验 schema（含 `finding_id` 唯一）。retry 失败抛回用户，**不要**再 retry。如果 `wait_codex_done.sh` 本身失败（pane 不可用 / status unknown），参照 [pitfalls.md §Codex 运行时失败恢复](pitfalls.md#codex-运行时失败--subagent-恢复需用户审批) 报告状态并等待用户选择。**为什么不 pane read 抓输出？** Codex 输出会被 TUI 排版、滚动、wrap 影响；文件落盘是唯一可靠的契约。
 
 **subagent 模式**：`Agent` tool 同步返回，**没有「等待」步骤**（跳过 assert_pane_owned + wait_codex_done）。subagent 返回后直接 validate：
 

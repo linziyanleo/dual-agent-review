@@ -18,6 +18,7 @@
 set -euo pipefail
 
 fail() { printf 'ABORT: %s\n' "$*" >&2; exit 1; }
+warn_diag() { printf 'WARN: %s\n' "$*" >&2; }
 
 SESSION_ROOT="${1:-}"
 OUTPUT_PATH="${2:-}"
@@ -40,6 +41,28 @@ codex_agent_status() {
   local info
   info="$(herdr pane get "$CODEX_PANE" 2>/dev/null)" || { printf 'unknown'; return; }
   printf '%s' "$info" | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["pane"].get("agent_status", "unknown"))' 2>/dev/null || printf 'unknown'
+}
+
+capture_failure_diagnostics() {
+  local status="$1" reason="$2"
+  local diag="$SESSION_ROOT/wait-failure-$(date +%Y%m%d-%H%M%S).diag"
+  {
+    printf '=== DAR wait failure diagnostics ===\n'
+    printf 'timestamp: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'reason: %s\n' "$reason"
+    printf 'agent_status: %s\n' "$status"
+    printf 'expected_output: %s\n' "$OUTPUT_PATH"
+    printf 'elapsed: %ss\n' "$ELAPSED"
+    printf '\n=== herdr pane get ===\n'
+    herdr pane get "$CODEX_PANE" 2>&1 || printf '(unavailable)\n'
+    printf '\n=== pane read --source visible (last 40 lines) ===\n'
+    herdr pane read "$CODEX_PANE" --source visible --lines 40 --format text 2>&1 || printf '(unavailable)\n'
+    printf '\n=== pane read --source recent (last 80 lines) ===\n'
+    herdr pane read "$CODEX_PANE" --source recent --lines 80 --format text 2>&1 || printf '(unavailable)\n'
+    printf '\n=== session files ===\n'
+    ls -la "$SESSION_ROOT/" 2>&1
+  } > "$diag" 2>&1
+  printf '%s' "$diag"
 }
 
 ELAPSED=0
@@ -79,10 +102,25 @@ while [ "$ELAPSED" -lt "$TOTAL_TIMEOUT" ] || [ "$(codex_agent_status)" = "workin
   ELAPSED=$(( ELAPSED + POLL_INTERVAL ))
 done
 
-# Final file check after total timeout.
+# Final file check after loop exit.
 if [ -f "$OUTPUT_PATH" ] && [ -s "$OUTPUT_PATH" ]; then
   printf 'file_ready\n'
   exit 0
 fi
 
-fail "Codex stopped without producing output (pane=$CODEX_PANE, status=$(codex_agent_status), cwd=$(herdr pane get "$CODEX_PANE" 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin).get("result",{}).get("pane",{}).get("foreground_cwd","?"))' 2>/dev/null || echo '?'), waited >=${TOTAL_TIMEOUT}s, expected=$OUTPUT_PATH)"
+# Classify failure state
+FINAL_STATUS="$(codex_agent_status)"
+case "$FINAL_STATUS" in
+  done)    FAIL_REASON="no_output_after_done" ;;
+  unknown) FAIL_REASON="status_unknown" ;;
+  idle)    FAIL_REASON="pane_idle_without_output" ;;
+  *)       FAIL_REASON="stopped_without_output_status_${FINAL_STATUS}" ;;
+esac
+
+if ! herdr pane get "$CODEX_PANE" >/dev/null 2>&1; then
+  FAIL_REASON="pane_unavailable"
+fi
+
+DIAG_PATH="$(capture_failure_diagnostics "$FINAL_STATUS" "$FAIL_REASON")"
+warn_diag "diagnostics written to $DIAG_PATH"
+fail "Codex $FAIL_REASON (pane=$CODEX_PANE, status=$FINAL_STATUS, waited>=${ELAPSED}s, expected=$OUTPUT_PATH, diagnostics=$DIAG_PATH)"

@@ -38,6 +38,7 @@ Number findings F-1, F-2... within THIS round (not across rounds).
 
 ## Critical rules for incremental rounds
 
+- **YAML quoting**: All string scalar values MUST be double-quoted (`"..."`). Any value containing `: ` (colon-space) causes a YAML parse error if unquoted. Example: `location: "re: F-3 from v1 / Step 2"` — NOT `location: re: F-3 from v1 / Step 2`.
 - **Do NOT re-raise issues you've already raised** unless the fix is genuinely wrong or insufficient. If the author said "rejected because X" and X is reasonable, accept it and move on. Re-raising rejected items is what makes loops fail to converge.
 - **Approve quickly when warranted**. If the previous findings were all addressed reasonably and you have no genuine new concerns, set `overall_verdict: approve` and `review_comments: []`. Do not invent nits to justify another round.
 - **No architectural reframing at this stage**. If the overall approach was acceptable earlier, don't suggest scrapping it now.

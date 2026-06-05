@@ -68,3 +68,4 @@ esac
 
 printf '[%s] WARN: codex not working after %s retries, status=%s pane=%s\n' "$(date)" "$MAX_RETRIES" "$STATUS" "$CODEX_PANE" >> "$SESSION_ROOT/session.log"
 printf 'codex_not_working\n'
+exit 1

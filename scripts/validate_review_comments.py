@@ -69,7 +69,11 @@ def main() -> int:
     try:
         doc = yaml.safe_load(raw)
     except yaml.YAMLError as e:
-        return fail(f"{path}: YAML parse error: {e}")
+        hint = ""
+        err_str = str(e)
+        if "mapping values are not allowed here" in err_str:
+            hint = " [hint: a string value likely contains unquoted `: ` (colon-space) — wrap it in double quotes]"
+        return fail(f"{path}: YAML parse error: {e}{hint}")
 
     if not isinstance(doc, dict):
         return fail(f"{path}: top-level must be a mapping")
