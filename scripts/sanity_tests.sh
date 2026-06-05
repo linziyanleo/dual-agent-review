@@ -1044,7 +1044,7 @@ grep -q 'dismiss_codex_plan_prompt.sh' "$SCRIPT_DIR/retry_review_comments.sh" \
   || die "retry_review_comments.sh should invoke dismiss_codex_plan_prompt.sh after retry send"
 pass "send/retry paths are wired to dismiss helper"
 
-# Test 4: All retries exhausted, codex never enters working -> exit non-zero
+# Test 4: All retries exhausted, no visible Plan prompt -> exit 0 (defer to wait file-first)
 DISMISS_STUCK="$WORKDIR/dismiss_stuck_shim"
 mkdir -p "$DISMISS_STUCK"
 cat > "$DISMISS_STUCK/herdr" <<SHIM
@@ -1060,10 +1060,34 @@ SHIM
 chmod +x "$DISMISS_STUCK/herdr"
 rm -f "$WORKDIR/dismiss_shim_state"
 : > "$DISMISS_ROOT/session.log"
-if PATH="$DISMISS_STUCK:$PATH" "$SCRIPT_DIR/dismiss_codex_plan_prompt.sh" "$DISMISS_ROOT" >/dev/null 2>&1; then
-  die "dismiss should exit non-zero when all retries exhausted"
+if ! PATH="$DISMISS_STUCK:$PATH" "$SCRIPT_DIR/dismiss_codex_plan_prompt.sh" "$DISMISS_ROOT" >/dev/null 2>&1; then
+  die "dismiss should exit 0 when no TUI blocker visible (defer to wait file-first)"
 fi
-pass "all retries exhausted -> exit 1"
+grep -q 'WARN: codex not working' "$DISMISS_ROOT/session.log" \
+  || die "dismiss should log warning when deferring"
+pass "idle + no Plan prompt -> exit 0 (defer to file-first wait)"
+
+# Test 5: All retries exhausted, Plan prompt still visible -> exit 1 (confirmed blocker)
+DISMISS_BLOCKER="$WORKDIR/dismiss_blocker_shim"
+mkdir -p "$DISMISS_BLOCKER"
+cat > "$DISMISS_BLOCKER/herdr" <<SHIM
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "wait agent-status") exit 1 ;;
+  "pane get")          printf '{"result":{"pane":{"agent_status":"idle"}}}' ;;
+  "pane read")         printf 'Create a plan?  shift + tab use Plan mode   esc dismiss\n' ;;
+  "pane send-keys")    : ;;
+  *) : ;;
+esac
+SHIM
+chmod +x "$DISMISS_BLOCKER/herdr"
+: > "$DISMISS_ROOT/session.log"
+if PATH="$DISMISS_BLOCKER:$PATH" "$SCRIPT_DIR/dismiss_codex_plan_prompt.sh" "$DISMISS_ROOT" >/dev/null 2>&1; then
+  die "dismiss should exit 1 when Plan prompt persists after all retries"
+fi
+grep -q 'Plan prompt still visible' "$DISMISS_ROOT/session.log" \
+  || die "dismiss should log confirmed Plan prompt blocker"
+pass "Plan prompt persists -> exit 1 (confirmed blocker)"
 
 # ─────────────────────────────────────────────────────────────────────────────
 step "subagent-review-v1.md — renders with SPEC_CONTEXT_FILE + PLAN_PATH + OUTPUT_PATH"
@@ -1201,6 +1225,23 @@ VG_NOSUB="$(cd "$VG_CWD" && HERDR_ENV= HERDR_PANE_ID= REVIEW_MODE=subagent \
   PATH="$VG_PATH" \
   "$SCRIPT_DIR/preflight.sh" 2>&1)" || die "preflight subagent should pass without herdr, got: $VG_NOSUB"
 pass "subagent mode without herdr -> preflight pass (no version check)"
+
+# ─────────────────────────────────────────────────────────────────────────────
+step "detect_driver.sh — codex mode rejects non-herdr TERMINAL_DRIVER override"
+if REVIEW_MODE=codex TERMINAL_DRIVER=tmux "$SCRIPT_DIR/detect_driver.sh" 2>/dev/null; then
+  die "detect_driver should reject TERMINAL_DRIVER=tmux in codex mode"
+fi
+pass "codex + TERMINAL_DRIVER=tmux -> fail fast"
+
+# herdr override in codex mode should pass
+DRV_OUT="$(REVIEW_MODE=codex TERMINAL_DRIVER=herdr "$SCRIPT_DIR/detect_driver.sh" 2>&1)"
+[ "$DRV_OUT" = "herdr" ] || die "codex + TERMINAL_DRIVER=herdr should return herdr, got: $DRV_OUT"
+pass "codex + TERMINAL_DRIVER=herdr -> pass"
+
+# subagent mode allows any override
+DRV_OUT2="$(REVIEW_MODE=subagent TERMINAL_DRIVER=subagent "$SCRIPT_DIR/detect_driver.sh" 2>&1)"
+[ "$DRV_OUT2" = "subagent" ] || die "subagent + TERMINAL_DRIVER=subagent should return subagent, got: $DRV_OUT2"
+pass "subagent + TERMINAL_DRIVER=subagent -> pass"
 
 # ─────────────────────────────────────────────────────────────────────────────
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"

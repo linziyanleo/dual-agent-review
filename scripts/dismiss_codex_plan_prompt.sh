@@ -67,5 +67,18 @@ case "$STATUS" in
 esac
 
 printf '[%s] WARN: codex not working after %s retries, status=%s pane=%s\n' "$(date)" "$MAX_RETRIES" "$STATUS" "$CODEX_PANE" >> "$SESSION_ROOT/session.log"
-printf 'codex_not_working\n'
-exit 1
+
+# Only exit 1 for confirmed TUI blocker; idle/unknown without visible blocker
+# defers to wait_codex_done.sh file-first check
+VISIBLE="$(herdr pane read "$CODEX_PANE" --source visible --lines 80 --format text 2>/dev/null || true)"
+case "$VISIBLE" in
+  *"Create a plan?"*"esc dismiss"*)
+    printf '[%s] ABORT: Plan prompt still visible after %s dismiss attempts\n' "$(date)" "$MAX_RETRIES" >> "$SESSION_ROOT/session.log"
+    printf 'codex_not_working\n'
+    exit 1
+    ;;
+  *)
+    printf 'codex_not_working\n'
+    exit 0
+    ;;
+esac

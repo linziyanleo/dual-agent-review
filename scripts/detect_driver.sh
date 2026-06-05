@@ -5,6 +5,10 @@
 set -euo pipefail
 
 if [ -n "${TERMINAL_DRIVER:-}" ]; then
+  if [ "${REVIEW_MODE:-codex}" = "codex" ] && [ "$TERMINAL_DRIVER" != "herdr" ]; then
+    echo "ABORT: codex mode requires TERMINAL_DRIVER=herdr; got '$TERMINAL_DRIVER'" >&2
+    exit 1
+  fi
   printf '%s' "$TERMINAL_DRIVER"
   exit 0
 fi
