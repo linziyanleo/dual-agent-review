@@ -66,6 +66,7 @@ capture_failure_diagnostics() {
 }
 
 ELAPSED=0
+RESEND_ATTEMPTED=0
 # Soft timeout: stay in the loop while under TOTAL_TIMEOUT, OR while Codex is
 # still actively working past the cap (short-circuit avoids the herdr call until
 # the cap is actually reached).
@@ -92,11 +93,21 @@ while [ "$ELAPSED" -lt "$TOTAL_TIMEOUT" ] || [ "$(codex_agent_status)" = "workin
       fi
       sleep 1
     done
-    # Grace elapsed, still no file. If Codex resumed working it was a mid-task
-    # turn boundary — keep waiting. Otherwise it stopped without output: break to
-    # the final check + fail so the caller can resend instead of proceeding on a
-    # phantom success.
-    [ "$(codex_agent_status)" = "working" ] || break
+    if [ "$(codex_agent_status)" = "working" ]; then
+      : # mid-task turn boundary — keep waiting
+    elif [ "$RESEND_ATTEMPTED" -eq 0 ]; then
+      RESEND_ATTEMPTED=1
+      herdr pane send-keys "$CODEX_PANE" Enter
+      printf '[%s] RESENT_ENTER_RECOVERY pane=%s\n' "$(date)" "$CODEX_PANE" >> "$SESSION_ROOT/session.log"
+      sleep 2
+      if [ "$(codex_agent_status)" = "working" ]; then
+        ELAPSED=$(( ELAPSED + GRACE_SECS + 2 ))
+        continue
+      fi
+      break
+    else
+      break
+    fi
   fi
 
   ELAPSED=$(( ELAPSED + POLL_INTERVAL ))

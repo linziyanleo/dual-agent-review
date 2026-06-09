@@ -36,7 +36,7 @@ for attempt in $(seq 1 "$MAX_RETRIES"); do
 
   STATUS="$(codex_agent_status)"
   case "$STATUS" in
-    working|done)
+    working)
       printf 'codex_%s\n' "$STATUS"
       exit 0
       ;;
@@ -60,7 +60,7 @@ done
 
 STATUS="$(codex_agent_status)"
 case "$STATUS" in
-  working|done)
+  working)
     printf 'codex_%s\n' "$STATUS"
     exit 0
     ;;
